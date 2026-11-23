@@ -416,7 +416,7 @@ public sealed class MainForm : Form
         RefreshEnvironmentLabel();
         RefreshPatchStatus();
         StartWatching();
-        _ = CheckForUpdatesAsync(silent: true);
+        _ = RunStartupUpdateCheckAsync();
     }
 
     protected override void OnHandleCreated(EventArgs e)
@@ -710,6 +710,14 @@ public sealed class MainForm : Form
         }
     }
 
+    private async Task RunStartupUpdateCheckAsync()
+    {
+        // Give Windows a few seconds after login/boot to bring up network interfaces
+        await Task.Delay(TimeSpan.FromSeconds(12));
+        if (!IsDisposed)
+            await CheckForUpdatesAsync(silent: true);
+    }
+
     private async Task CheckForUpdatesAsync(bool silent)
     {
         _updateBtn.Enabled = false;
@@ -721,6 +729,17 @@ public sealed class MainForm : Form
 
             if (available && mgr is not null && info is not null)
             {
+                var restartArgs = (_launchMinimized || WindowState == FormWindowState.Minimized || !Visible)
+                    ? new[] { "--minimized" }
+                    : null;
+
+                if (silent)
+                {
+                    AppendLog("Installiere Update automatisch im Hintergrund...");
+                    await AppUpdater.DownloadAndRestartAsync(mgr, info, restartArgs);
+                    return;
+                }
+
                 var answer = MessageBox.Show(
                     this,
                     $"{message}\n\nJetzt herunterladen und reMedal neu starten?",
@@ -731,7 +750,7 @@ public sealed class MainForm : Form
                 if (answer == DialogResult.Yes)
                 {
                     AppendLog("Lade Update herunter...");
-                    await AppUpdater.DownloadAndRestartAsync(mgr, info);
+                    await AppUpdater.DownloadAndRestartAsync(mgr, info, restartArgs);
                 }
             }
             else if (!silent)
@@ -741,7 +760,8 @@ public sealed class MainForm : Form
         }
         finally
         {
-            _updateBtn.Enabled = true;
+            if (!IsDisposed)
+                _updateBtn.Enabled = true;
         }
     }
 

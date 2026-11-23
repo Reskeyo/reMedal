@@ -31,9 +31,9 @@ public static class AppUpdater
         }
     }
 
-    public static async Task DownloadAndRestartAsync(UpdateManager mgr, UpdateInfo info)
+    public static async Task DownloadAndRestartAsync(UpdateManager mgr, UpdateInfo info, string[]? restartArgs = null)
     {
         await mgr.DownloadUpdatesAsync(info);
-        mgr.ApplyUpdatesAndRestart(info);
+        mgr.ApplyUpdatesAndRestart(info, restartArgs);
     }
 }
