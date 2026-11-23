@@ -36,8 +36,9 @@ public sealed class MainForm : Form
 
     private readonly NotifyIcon _trayIcon;
     private readonly ToolStripMenuItem _trayToggleItem;
-    private readonly Icon _activeIcon;
-    private readonly Icon _pausedIcon;
+    private readonly Icon _appIcon;
+    private readonly Icon _trayActiveIcon;
+    private readonly Icon _trayPausedIcon;
 
     private readonly Label _statusLabel;
     private readonly Label _envLabel;
@@ -66,11 +67,12 @@ public sealed class MainForm : Form
         _launchMinimized = launchMinimized || config.StartMinimized;
         _watcher = new ClipWatcher(_injector, AppendLog);
 
-        _activeIcon = LoadAppIcon(paused: false);
-        _pausedIcon = LoadAppIcon(paused: true);
+        _appIcon = LoadEmbeddedIcon("remedal.ico", paused: false);
+        _trayActiveIcon = LoadEmbeddedIcon("remedal_tray.ico", paused: false);
+        _trayPausedIcon = LoadEmbeddedIcon("remedal_tray.ico", paused: true);
 
         Text = $"reMedal v{AppUpdater.CurrentVersion}";
-        Icon = _activeIcon;
+        Icon = _appIcon;
         BackColor = BgDark;
         ForeColor = TextPrimary;
         Size = new Size(900, 700);
@@ -89,7 +91,7 @@ public sealed class MainForm : Form
         _trayIcon = new NotifyIcon
         {
             Text = "reMedal",
-            Icon = _activeIcon,
+            Icon = _trayActiveIcon,
             ContextMenuStrip = trayMenu,
             Visible = true
         };
@@ -454,8 +456,9 @@ public sealed class MainForm : Form
         _toolTip.Dispose();
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
-        _activeIcon.Dispose();
-        _pausedIcon.Dispose();
+        _appIcon.Dispose();
+        _trayActiveIcon.Dispose();
+        _trayPausedIcon.Dispose();
         base.OnFormClosing(e);
     }
 
@@ -794,9 +797,9 @@ public sealed class MainForm : Form
         _statusLabel.ForeColor = active ? Color.FromArgb(74, 222, 128) : AccentAmber;
         _toggleButton.Text = active ? "Auto-Import pausieren" : "Auto-Import starten";
         _trayToggleItem.Text = active ? "Auto-Import pausieren" : "Auto-Import starten";
-        _trayIcon.Icon = active ? _activeIcon : _pausedIcon;
+        _trayIcon.Icon = active ? _trayActiveIcon : _trayPausedIcon;
         _trayIcon.Text = active ? "reMedal (Auto-Import aktiv)" : "reMedal (Auto-Import pausiert)";
-        Icon = _trayIcon.Icon;
+        Icon = _appIcon;
     }
 
     private void BrowseFolder()
@@ -885,11 +888,11 @@ public sealed class MainForm : Form
         _logBox.AppendText(line);
     }
 
-    private static Icon LoadAppIcon(bool paused)
+    private static Icon LoadEmbeddedIcon(string fileName, bool paused)
     {
         var asm = System.Reflection.Assembly.GetExecutingAssembly();
         var resName = asm.GetManifestResourceNames()
-            .First(r => r.EndsWith("remedal.ico", StringComparison.OrdinalIgnoreCase));
+            .First(r => r.EndsWith(fileName, StringComparison.OrdinalIgnoreCase));
         using var stream = asm.GetManifestResourceStream(resName)!;
         using var baseIcon = new Icon(stream, new Size(32, 32));
         if (!paused)
