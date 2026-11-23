@@ -66,8 +66,8 @@ public sealed class MainForm : Form
         _launchMinimized = launchMinimized || config.StartMinimized;
         _watcher = new ClipWatcher(_injector, AppendLog);
 
-        _activeIcon = CreateStatusIcon(Color.FromArgb(34, 197, 94));
-        _pausedIcon = CreateStatusIcon(TextMuted);
+        _activeIcon = LoadAppIcon(paused: false);
+        _pausedIcon = LoadAppIcon(paused: true);
 
         Text = $"reMedal v{AppUpdater.CurrentVersion}";
         Icon = _activeIcon;
@@ -865,16 +865,24 @@ public sealed class MainForm : Form
         _logBox.AppendText(line);
     }
 
-    private static Icon CreateStatusIcon(Color color)
+    private static Icon LoadAppIcon(bool paused)
     {
+        var asm = System.Reflection.Assembly.GetExecutingAssembly();
+        var resName = asm.GetManifestResourceNames()
+            .First(r => r.EndsWith("remedal.ico", StringComparison.OrdinalIgnoreCase));
+        using var stream = asm.GetManifestResourceStream(resName)!;
+        using var baseIcon = new Icon(stream, new Size(32, 32));
+        if (!paused)
+            return (Icon)baseIcon.Clone();
+
         using var bmp = new Bitmap(32, 32);
         using var g = Graphics.FromImage(bmp);
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.Clear(Color.Transparent);
-        using var bgBrush = new SolidBrush(Color.FromArgb(30, 41, 59));
-        g.FillEllipse(bgBrush, 2, 2, 28, 28);
-        using var dotBrush = new SolidBrush(color);
-        g.FillEllipse(dotBrush, 8, 8, 16, 16);
+        g.DrawIcon(baseIcon, new Rectangle(0, 0, 32, 32));
+        using var bg = new SolidBrush(Color.FromArgb(15, 23, 42));
+        g.FillEllipse(bg, 18, 18, 13, 13);
+        using var dot = new SolidBrush(AccentAmber);
+        g.FillEllipse(dot, 20, 20, 9, 9);
         var hIcon = bmp.GetHicon();
         try
         {

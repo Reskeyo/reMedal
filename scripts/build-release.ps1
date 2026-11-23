@@ -16,7 +16,8 @@ dotnet publish $csproj -c Release -r win-x64 --self-contained true -p:Version=$V
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "Packaging Velopack installer & update bundle..."
-vpk pack --packId reMedal --packTitle "reMedal" --packVersion $Version --packDir $publishDir --mainExe reMedal.exe --runtime win-x64 --outputDir $releasesDir
+$iconPath = Join-Path $root "MedalShadowSync\Resources\remedal.ico"
+vpk pack --packId reMedal --packTitle "reMedal" --packVersion $Version --packDir $publishDir --mainExe reMedal.exe --runtime win-x64 --icon $iconPath --outputDir $releasesDir
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "Done! Artifacts in $releasesDir :"
