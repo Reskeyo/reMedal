@@ -31,6 +31,15 @@ public sealed class MainForm : Form
         (30, "±30 Tage")
     ];
 
+    private static readonly (int Years, string Label)[] MaxYearsOptions =
+    [
+        (0, "Alle Jahre"),
+        (1, "Letztes Jahr (1J)"),
+        (2, "Bis 2 Jahre"),
+        (3, "Bis 3 Jahre"),
+        (5, "Bis 5 Jahre")
+    ];
+
     private readonly AppConfig _config;
     private readonly MedalDbInjector _injector = new();
     private readonly ClipWatcher _watcher;
@@ -52,8 +61,8 @@ public sealed class MainForm : Form
     private readonly Label _patchStatusLabel;
     private readonly Button _patchBtn;
     private readonly Button _restoreBtn;
-    private readonly ComboBox _windowDaysCombo;
-    private readonly CheckBox _onlyLastYearCheck;
+    private readonly DarkComboBox _windowDaysCombo;
+    private readonly DarkComboBox _maxYearsCombo;
     private readonly CheckBox _blockAdsCheck;
     private readonly Button _toggleButton;
     private readonly Button _backfillBtn;
@@ -63,6 +72,8 @@ public sealed class MainForm : Form
     private bool _exiting;
     private bool _trayHintShown;
     private int _backfillRunning;
+    private int _repatchRunning;
+    private readonly CancellationTokenSource _lifecycleCts = new();
 
     public MainForm(AppConfig config, bool launchMinimized)
     {
@@ -78,8 +89,8 @@ public sealed class MainForm : Form
         Icon = _appIcon;
         BackColor = BgDark;
         ForeColor = TextPrimary;
-        Size = new Size(900, 700);
-        MinimumSize = new Size(840, 620);
+        Size = new Size(820, 620);
+        MinimumSize = new Size(760, 540);
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 9.5f);
 
@@ -100,58 +111,73 @@ public sealed class MainForm : Form
         };
         _trayIcon.DoubleClick += (_, _) => ShowMainWindow();
 
-        // --- Main layout ---
+        // --- Main layout (2 compact cards + log + slim footer) ---
         var root = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            Padding = new Padding(16),
+            Padding = new Padding(14),
             ColumnCount = 1,
-            RowCount = 6,
+            RowCount = 4,
             BackColor = BgDark
         };
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-        // 1. Status banner card
-        var statusContent = new TableLayoutPanel
+        // 1. ShadowPlay-Import card (status + quick actions + folder + options)
+        var importStack = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 2,
+            RowCount = 3,
             AutoSize = true,
             BackColor = CardBg
         };
-        statusContent.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        statusContent.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        importStack.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        importStack.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        importStack.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var importRow1 = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            WrapContents = true,
+            BackColor = CardBg,
+            Margin = new Padding(0, 0, 0, 8)
+        };
         _statusLabel = new Label
         {
             AutoSize = true,
-            Font = new Font("Segoe UI", 10.5f, FontStyle.Bold),
+            MinimumSize = new Size(0, 30),
+            TextAlign = ContentAlignment.MiddleLeft,
+            Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
             ForeColor = TextPrimary,
-            Margin = new Padding(0, 0, 0, 4)
+            Margin = new Padding(0, 0, 14, 0)
         };
-        _envLabel = new Label
-        {
-            AutoSize = true,
-            ForeColor = TextMuted,
-            Margin = new Padding(0)
-        };
-        statusContent.Controls.Add(_statusLabel, 0, 0);
-        statusContent.Controls.Add(_envLabel, 0, 1);
-        root.Controls.Add(CreateSimpleCard(statusContent), 0, 0);
+        _toggleButton = CreateButton("Pausieren", AccentBlue, AccentBlueHover);
+        _toggleButton.Click += (_, _) => ToggleWatching();
 
-        // 2. Watch folder card
+        var importOneBtn = CreateButton("Clip importieren...", BtnSlate, BtnSlateHover);
+        importOneBtn.Click += async (_, _) => await ImportSingleClipAsync();
+
+        _backfillBtn = CreateButton("Letzte 30 Tage importieren", BtnSlate, BtnSlateHover);
+        _backfillBtn.Margin = new Padding(0);
+        _backfillBtn.Click += async (_, _) => await RunBackfillAsync(isStartup: false);
+
+        importRow1.Controls.Add(_statusLabel);
+        importRow1.Controls.Add(_toggleButton);
+        importRow1.Controls.Add(importOneBtn);
+        importRow1.Controls.Add(_backfillBtn);
+
         var folderLayout = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 3,
             RowCount = 1,
             AutoSize = true,
-            BackColor = CardBg
+            BackColor = CardBg,
+            Margin = new Padding(0, 0, 0, 8)
         };
         folderLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         folderLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -170,11 +196,15 @@ public sealed class MainForm : Form
         };
         _folderBox.Leave += (_, _) => ApplyFolderChange();
 
-        var browseBtn = CreateButton("Durchsuchen...", BtnSlate, BtnSlateHover);
+        var browseBtn = CreateButton("...", BtnSlate, BtnSlateHover);
+        browseBtn.AutoSize = false;
+        browseBtn.Size = new Size(36, 30);
+        browseBtn.Padding = new Padding(0);
         browseBtn.Margin = new Padding(0, 0, 8, 0);
+        _toolTip.SetToolTip(browseBtn, "ShadowPlay-Ordner auswählen");
         browseBtn.Click += (_, _) => BrowseFolder();
 
-        var detectSpBtn = CreateButton("ShadowPlay suchen", BtnSlate, BtnSlateHover);
+        var detectSpBtn = CreateButton("ShadowPlay finden", BtnSlate, BtnSlateHover);
         detectSpBtn.Margin = new Padding(0);
         _toolTip.SetToolTip(detectSpBtn, "Erkennt den NVIDIA ShadowPlay-Ordner automatisch aus der Windows-Registry");
         detectSpBtn.Click += (_, _) =>
@@ -194,9 +224,51 @@ public sealed class MainForm : Form
         folderLayout.Controls.Add(_folderBox, 0, 0);
         folderLayout.Controls.Add(browseBtn, 1, 0);
         folderLayout.Controls.Add(detectSpBtn, 2, 0);
-        root.Controls.Add(CreateCard("Überwachter ShadowPlay-Ordner (automatische Spiel-Erkennung aktiv)", folderLayout), 0, 1);
 
-        // 3. Medal extensions card (Story Throwbacks + Ad-Blocker)
+        var optionsFlow = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            WrapContents = true,
+            BackColor = CardBg,
+            Margin = new Padding(0)
+        };
+        _subfoldersCheck = CreateCheckBox("Unterordner", _config.IncludeSubdirectories, CardBg);
+        _subfoldersCheck.CheckedChanged += (_, _) =>
+        {
+            _config.IncludeSubdirectories = _subfoldersCheck.Checked;
+            _config.Save();
+            if (_watcher.IsRunning) _watcher.Start(_config);
+        };
+        _autostartCheck = CreateCheckBox("Mit Windows starten", MedalEnvironment.IsAutostartEnabled(), CardBg);
+        _autostartCheck.CheckedChanged += (_, _) =>
+        {
+            try
+            {
+                MedalEnvironment.SetAutostart(_autostartCheck.Checked);
+                AppendLog(_autostartCheck.Checked ? "Autostart aktiviert." : "Autostart deaktiviert.");
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"Autostart-Fehler: {ex.Message}");
+            }
+        };
+        _minimizedCheck = CreateCheckBox("Minimiert im Tray starten", _config.StartMinimized, CardBg);
+        _minimizedCheck.CheckedChanged += (_, _) =>
+        {
+            _config.StartMinimized = _minimizedCheck.Checked;
+            _config.Save();
+        };
+        optionsFlow.Controls.Add(_subfoldersCheck);
+        optionsFlow.Controls.Add(_autostartCheck);
+        optionsFlow.Controls.Add(_minimizedCheck);
+
+        importStack.Controls.Add(importRow1, 0, 0);
+        importStack.Controls.Add(folderLayout, 0, 1);
+        importStack.Controls.Add(optionsFlow, 0, 2);
+        root.Controls.Add(CreateCard("ShadowPlay-Import", importStack), 0, 0);
+
+        // 2. Medal-Patch card (Throwbacks + Ad-Blocker)
         var extStack = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
@@ -214,21 +286,21 @@ public sealed class MainForm : Form
             AutoSize = true,
             WrapContents = true,
             BackColor = CardBg,
-            Margin = new Padding(0, 0, 0, 10)
+            Margin = new Padding(0, 0, 0, 8)
         };
         _patchStatusLabel = new Label
         {
             AutoSize = true,
-            MinimumSize = new Size(0, 32),
+            MinimumSize = new Size(0, 30),
             TextAlign = ContentAlignment.MiddleLeft,
-            Margin = new Padding(0, 0, 16, 0),
+            Margin = new Padding(0, 0, 14, 0),
             Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
             ForeColor = TextPrimary
         };
         _patchBtn = CreateButton("Patch aktivieren", AccentBlue, AccentBlueHover);
         _patchBtn.Click += (_, _) => ApplyThrowbacksPatch();
 
-        _restoreBtn = CreateButton("Original wiederherstellen", BtnSlate, BtnSlateHover);
+        _restoreBtn = CreateButton("Wiederherstellen", BtnSlate, BtnSlateHover);
         _restoreBtn.Margin = new Padding(0);
         _restoreBtn.Click += (_, _) => RestoreMedalOriginal();
 
@@ -246,22 +318,18 @@ public sealed class MainForm : Form
         };
         var windowLbl = new Label
         {
-            Text = "Rückblick-Zeitraum:",
+            Text = "Zeitraum:",
             AutoSize = true,
             MinimumSize = new Size(0, 28),
             TextAlign = ContentAlignment.MiddleLeft,
             ForeColor = TextMuted,
-            Margin = new Padding(0, 0, 8, 0)
+            Margin = new Padding(0, 0, 6, 0)
         };
-        _windowDaysCombo = new ComboBox
+        _windowDaysCombo = new DarkComboBox(InputBg, TextPrimary, BorderColor, AccentBlue)
         {
-            DropDownStyle = ComboBoxStyle.DropDownList,
-            FlatStyle = FlatStyle.Flat,
-            BackColor = InputBg,
-            ForeColor = TextPrimary,
-            Width = 145,
+            Width = 140,
             Anchor = AnchorStyles.Left,
-            Margin = new Padding(0, 2, 24, 0)
+            Margin = new Padding(0, 2, 16, 0)
         };
         foreach (var opt in WindowOptions)
             _windowDaysCombo.Items.Add(opt.Label);
@@ -273,136 +341,59 @@ public sealed class MainForm : Form
             _config.ThrowbackWindowDays = WindowOptions[_windowDaysCombo.SelectedIndex].Days;
             _config.Save();
             var desc = _config.ThrowbackWindowDays == 0 ? "1 Tag (selber Tag)" : $"±{_config.ThrowbackWindowDays} {(_config.ThrowbackWindowDays == 1 ? "Tag" : "Tage")}";
-            AppendLog($"Rückblick-Zeitraum auf {desc} gesetzt (zum Übernehmen in Medal bitte 'Erneut patchen' klicken).");
+            AppendLog($"Rückblick-Zeitraum auf {desc} gesetzt (zum Übernehmen bitte 'Erneut patchen' klicken).");
         };
 
-        _blockAdsCheck = new CheckBox
+        var yearsLbl = new Label
         {
-            Text = "Werbung in Medal ausblenden (über Patch)",
+            Text = "Jahre:",
             AutoSize = true,
             MinimumSize = new Size(0, 28),
-            ForeColor = TextPrimary,
-            Checked = _config.BlockAdsEnabled,
-            Margin = new Padding(0, 0, 18, 0)
+            TextAlign = ContentAlignment.MiddleLeft,
+            ForeColor = TextMuted,
+            Margin = new Padding(0, 0, 6, 0)
         };
+        _maxYearsCombo = new DarkComboBox(InputBg, TextPrimary, BorderColor, AccentBlue)
+        {
+            Width = 135,
+            Anchor = AnchorStyles.Left,
+            Margin = new Padding(0, 2, 18, 0)
+        };
+        foreach (var opt in MaxYearsOptions)
+            _maxYearsCombo.Items.Add(opt.Label);
+        var yearsIdx = Array.FindIndex(MaxYearsOptions, o => o.Years == _config.ThrowbackMaxYears);
+        _maxYearsCombo.SelectedIndex = yearsIdx >= 0 ? yearsIdx : 0;
+        _maxYearsCombo.SelectedIndexChanged += (_, _) =>
+        {
+            if (_maxYearsCombo.SelectedIndex < 0) return;
+            _config.ThrowbackMaxYears = MaxYearsOptions[_maxYearsCombo.SelectedIndex].Years;
+            _config.ThrowbackOnlyLastYear = _config.ThrowbackMaxYears == 1;
+            _config.Save();
+            AppendLog($"Rückblick-Tiefe auf '{MaxYearsOptions[_maxYearsCombo.SelectedIndex].Label}' gesetzt (zum Übernehmen bitte 'Erneut patchen' klicken).");
+        };
+
+        _blockAdsCheck = CreateCheckBox("Werbung ausblenden", _config.BlockAdsEnabled, CardBg);
+        _blockAdsCheck.Margin = new Padding(0, 3, 0, 0);
         _blockAdsCheck.CheckedChanged += (_, _) =>
         {
             _config.BlockAdsEnabled = _blockAdsCheck.Checked;
             _config.Save();
             AppendLog(_config.BlockAdsEnabled
-                ? "Werbe-Blocker aktiviert (zum Übernehmen in Medal bitte 'Erneut patchen' klicken)."
-                : "Werbe-Blocker deaktiviert (zum Übernehmen in Medal bitte 'Erneut patchen' klicken).");
-        };
-
-        _onlyLastYearCheck = new CheckBox
-        {
-            Text = "Nur letztes Jahr",
-            AutoSize = true,
-            MinimumSize = new Size(0, 28),
-            ForeColor = TextPrimary,
-            Checked = _config.ThrowbackOnlyLastYear,
-            Margin = new Padding(0)
-        };
-        _onlyLastYearCheck.CheckedChanged += (_, _) =>
-        {
-            _config.ThrowbackOnlyLastYear = _onlyLastYearCheck.Checked;
-            _config.Save();
-            AppendLog(_config.ThrowbackOnlyLastYear
-                ? "Rückblick auf letztes Jahr beschränkt (zum Übernehmen bitte 'Erneut patchen' klicken)."
-                : "Rückblick zeigt alle vergangenen Jahre (zum Übernehmen bitte 'Erneut patchen' klicken).");
+                ? "Werbe-Blocker aktiviert (zum Übernehmen bitte 'Erneut patchen' klicken)."
+                : "Werbe-Blocker deaktiviert (zum Übernehmen bitte 'Erneut patchen' klicken).");
         };
 
         extRow2.Controls.Add(windowLbl);
         extRow2.Controls.Add(_windowDaysCombo);
+        extRow2.Controls.Add(yearsLbl);
+        extRow2.Controls.Add(_maxYearsCombo);
         extRow2.Controls.Add(_blockAdsCheck);
-        extRow2.Controls.Add(_onlyLastYearCheck);
 
         extStack.Controls.Add(extRow1, 0, 0);
         extStack.Controls.Add(extRow2, 0, 1);
-        root.Controls.Add(CreateCard("Medal-Erweiterungen (Story-Rückblicke & Werbefreiheit)", extStack), 0, 2);
+        root.Controls.Add(CreateCard("Medal-Patch (Rückblicke & Werbefreiheit)", extStack), 0, 1);
 
-        // 4. Options row
-        var optionsFlow = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            AutoSize = true,
-            WrapContents = true,
-            BackColor = BgDark,
-            Margin = new Padding(0, 0, 0, 10)
-        };
-
-        _subfoldersCheck = CreateCheckBox("Unterordner überwachen", _config.IncludeSubdirectories);
-        _subfoldersCheck.CheckedChanged += (_, _) =>
-        {
-            _config.IncludeSubdirectories = _subfoldersCheck.Checked;
-            _config.Save();
-            if (_watcher.IsRunning) _watcher.Start(_config);
-        };
-
-        _autostartCheck = CreateCheckBox("Mit Windows starten", MedalEnvironment.IsAutostartEnabled());
-        _autostartCheck.CheckedChanged += (_, _) =>
-        {
-            try
-            {
-                MedalEnvironment.SetAutostart(_autostartCheck.Checked);
-                AppendLog(_autostartCheck.Checked ? "Autostart aktiviert." : "Autostart deaktiviert.");
-            }
-            catch (Exception ex)
-            {
-                AppendLog($"Autostart-Fehler: {ex.Message}");
-            }
-        };
-
-        _minimizedCheck = CreateCheckBox("Minimiert im Tray starten", _config.StartMinimized);
-        _minimizedCheck.CheckedChanged += (_, _) =>
-        {
-            _config.StartMinimized = _minimizedCheck.Checked;
-            _config.Save();
-        };
-
-        optionsFlow.Controls.Add(_subfoldersCheck);
-        optionsFlow.Controls.Add(_autostartCheck);
-        optionsFlow.Controls.Add(_minimizedCheck);
-        root.Controls.Add(optionsFlow, 0, 3);
-
-        // 5. Action buttons row
-        var actionsFlow = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            AutoSize = true,
-            WrapContents = true,
-            BackColor = BgDark,
-            Margin = new Padding(0, 0, 0, 10)
-        };
-
-        _toggleButton = CreateButton("Auto-Import pausieren", AccentBlue, AccentBlueHover);
-        _toggleButton.Click += (_, _) => ToggleWatching();
-
-        var importOneBtn = CreateButton("Einzelnen Clip importieren...", BtnSlate, BtnSlateHover);
-        importOneBtn.Click += async (_, _) => await ImportSingleClipAsync();
-
-        _backfillBtn = CreateButton("Letzten Monat nachimportieren", BtnSlate, BtnSlateHover);
-        _backfillBtn.Click += async (_, _) => await RunBackfillAsync(isStartup: false);
-
-        var backupsBtn = CreateButton("Backups öffnen", BtnSlate, BtnSlateHover);
-        backupsBtn.Click += (_, _) =>
-        {
-            Directory.CreateDirectory(AppConfig.BackupsDir);
-            Process.Start(new ProcessStartInfo("explorer.exe", AppConfig.BackupsDir) { UseShellExecute = true });
-        };
-
-        _updateBtn = CreateButton("Nach Updates suchen", BtnSlate, BtnSlateHover);
-        _updateBtn.Margin = new Padding(0, 0, 0, 4);
-        _updateBtn.Click += async (_, _) => await CheckForUpdatesAsync(silent: false);
-
-        actionsFlow.Controls.Add(_toggleButton);
-        actionsFlow.Controls.Add(importOneBtn);
-        actionsFlow.Controls.Add(_backfillBtn);
-        actionsFlow.Controls.Add(backupsBtn);
-        actionsFlow.Controls.Add(_updateBtn);
-        root.Controls.Add(actionsFlow, 0, 4);
-
-        // 6. Log card
+        // 3. Log card
         _logBox = new TextBox
         {
             Dock = DockStyle.Fill,
@@ -415,7 +406,49 @@ public sealed class MainForm : Form
             Font = new Font("Consolas", 9f),
             Margin = new Padding(0)
         };
-        root.Controls.Add(CreateCard("Aktivitätsprotokoll", _logBox, fillDock: true), 0, 5);
+        root.Controls.Add(CreateCard("Aktivitätsprotokoll", _logBox, fillDock: true), 0, 2);
+
+        // 4. Slim footer (environment info + Backups / Updates)
+        var footer = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 3,
+            RowCount = 1,
+            AutoSize = true,
+            BackColor = BgDark,
+            Margin = new Padding(0, 8, 0, 0)
+        };
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        footer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        _envLabel = new Label
+        {
+            AutoSize = true,
+            Anchor = AnchorStyles.Left,
+            ForeColor = TextMuted,
+            Font = new Font("Segoe UI", 8.5f),
+            Margin = new Padding(2, 6, 8, 0)
+        };
+        var backupsBtn = CreateButton("Backups", BtnSlate, BtnSlateHover);
+        backupsBtn.MinimumSize = new Size(0, 28);
+        backupsBtn.Margin = new Padding(0, 0, 8, 0);
+        backupsBtn.Click += (_, _) =>
+        {
+            Directory.CreateDirectory(AppConfig.BackupsDir);
+            Process.Start(new ProcessStartInfo("explorer.exe", AppConfig.BackupsDir) { UseShellExecute = true });
+        };
+
+        _updateBtn = CreateButton("Updates prüfen", BtnSlate, BtnSlateHover);
+        _updateBtn.MinimumSize = new Size(0, 28);
+        _updateBtn.Margin = new Padding(0);
+        _updateBtn.Click += async (_, _) => await CheckForUpdatesAsync(silent: false);
+
+        footer.Controls.Add(_envLabel, 0, 0);
+        footer.Controls.Add(backupsBtn, 1, 0);
+        footer.Controls.Add(_updateBtn, 2, 0);
+        root.Controls.Add(footer, 0, 3);
 
         Controls.Add(root);
 
@@ -423,6 +456,7 @@ public sealed class MainForm : Form
         RefreshPatchStatus();
         StartWatching();
         _ = RunStartupUpdateCheckAsync();
+        _ = DelayedAutoRepatchCheckAsync(TimeSpan.FromSeconds(25), "App-Start");
     }
 
     protected override void OnHandleCreated(EventArgs e)
@@ -456,6 +490,8 @@ public sealed class MainForm : Form
             return;
         }
 
+        _lifecycleCts.Cancel();
+        _lifecycleCts.Dispose();
         _watcher.Dispose();
         _toolTip.Dispose();
         _trayIcon.Visible = false;
@@ -526,13 +562,14 @@ public sealed class MainForm : Form
         {
             Text = text,
             AutoSize = true,
-            MinimumSize = new Size(0, 32),
+            Height = 30,
+            MinimumSize = new Size(0, 30),
             Anchor = AnchorStyles.Left,
             FlatStyle = FlatStyle.Flat,
             BackColor = bg,
             ForeColor = TextPrimary,
-            Padding = new Padding(12, 4, 12, 4),
-            Margin = new Padding(0, 0, 8, 4),
+            Padding = new Padding(12, 0, 12, 0),
+            Margin = new Padding(0, 0, 8, 0),
             Cursor = Cursors.Hand
         };
         btn.FlatAppearance.BorderColor = BorderColor;
@@ -541,14 +578,14 @@ public sealed class MainForm : Form
         return btn;
     }
 
-    private static CheckBox CreateCheckBox(string text, bool isChecked) => new()
+    private static CheckBox CreateCheckBox(string text, bool isChecked, Color? bg = null) => new()
     {
         Text = text,
         AutoSize = true,
         Checked = isChecked,
         ForeColor = TextPrimary,
-        BackColor = BgDark,
-        Margin = new Padding(0, 0, 18, 4)
+        BackColor = bg ?? BgDark,
+        Margin = new Padding(0, 0, 18, 2)
     };
 
     private void RefreshEnvironmentLabel()
@@ -566,7 +603,7 @@ public sealed class MainForm : Form
         switch (status)
         {
             case PatchStatus.Patched:
-                _patchStatusLabel.Text = "Status: Aktiv (V10 gepatcht)";
+                _patchStatusLabel.Text = "Status: Aktiv (V18 gepatcht)";
                 _patchStatusLabel.ForeColor = Color.FromArgb(74, 222, 128);
                 _patchBtn.Text = "Erneut patchen";
                 _restoreBtn.Enabled = true;
@@ -574,7 +611,7 @@ public sealed class MainForm : Form
             case PatchStatus.OutdatedPatch:
                 _patchStatusLabel.Text = "Status: Veralteter Patch (Update nötig)";
                 _patchStatusLabel.ForeColor = AccentAmber;
-                _patchBtn.Text = "Patch auf V10 aktualisieren";
+                _patchBtn.Text = "Patch auf V18 aktualisieren";
                 _restoreBtn.Enabled = true;
                 break;
             case PatchStatus.Unpatched:
@@ -608,23 +645,27 @@ public sealed class MainForm : Form
             if (choice != DialogResult.Yes)
                 return;
 
-            foreach (var p in Process.GetProcessesByName("Medal"))
-            {
-                try { p.Kill(entireProcessTree: true); p.WaitForExit(3000); } catch { }
-            }
+            MedalAsarPatcher.KillMedal();
             Thread.Sleep(500);
         }
 
+        if (Interlocked.CompareExchange(ref _repatchRunning, 1, 0) != 0)
+            return;
+
         try
         {
-            var (ok, msg) = MedalAsarPatcher.ApplyPatch(null, _config.ThrowbackWindowDays, _config.BlockAdsEnabled, _config.ThrowbackOnlyLastYear);
+            var (ok, msg) = MedalAsarPatcher.ApplyPatch(null, _config.ThrowbackWindowDays, _config.BlockAdsEnabled, _config.ThrowbackMaxYears);
             AppendLog(msg);
             if (ok)
             {
                 _config.ThrowbacksEnabled = true;
                 _config.Save();
                 if (medalWasRunning)
+                {
                     MedalAsarPatcher.RestartMedal();
+                    // Medal may trigger a self-update on restart; re-check once after 20s
+                    _ = DelayedAutoRepatchCheckAsync(TimeSpan.FromSeconds(20), "nach Medal-Neustart");
+                }
             }
         }
         catch (Exception ex)
@@ -632,8 +673,78 @@ public sealed class MainForm : Form
             AppendLog($"Patch-Fehler: {ex.Message}");
             MessageBox.Show(this, $"Fehler beim Patchen:\n{ex.Message}", "reMedal", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+        finally
+        {
+            Interlocked.Exchange(ref _repatchRunning, 0);
+        }
 
         RefreshPatchStatus();
+    }
+
+    private async Task DelayedAutoRepatchCheckAsync(TimeSpan delay, string reason)
+    {
+        try
+        {
+            await Task.Delay(delay, _lifecycleCts.Token);
+            await TryAutoRepatchAsync(reason, _lifecycleCts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private async Task TryAutoRepatchAsync(string reason, CancellationToken ct)
+    {
+        if (!_config.ThrowbacksEnabled || IsDisposed)
+            return;
+
+        if (Interlocked.CompareExchange(ref _repatchRunning, 1, 0) != 0)
+            return;
+
+        try
+        {
+            var status = await Task.Run(() => MedalAsarPatcher.GetStatus(), ct);
+            if (status is not (PatchStatus.Unpatched or PatchStatus.OutdatedPatch))
+                return;
+
+            AppendLog($"Medal-Update/ungepatchter Stand erkannt ({reason}) – patche automatisch neu...");
+
+            var (ok, msg) = await Task.Run(() =>
+            {
+                var wasRunning = MedalAsarPatcher.IsMedalRunning();
+                if (wasRunning)
+                {
+                    MedalAsarPatcher.KillMedal();
+                    Thread.Sleep(600);
+                }
+
+                var result = MedalAsarPatcher.ApplyPatch(
+                    null,
+                    _config.ThrowbackWindowDays,
+                    _config.BlockAdsEnabled,
+                    _config.ThrowbackMaxYears);
+
+                if (result.Ok && wasRunning)
+                    MedalAsarPatcher.RestartMedal();
+
+                return result;
+            }, ct);
+
+            AppendLog(ok ? $"Auto-Patch erfolgreich ({reason})." : $"Auto-Patch fehlgeschlagen: {msg}");
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"Auto-Patch-Fehler ({reason}): {ex.Message}");
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _repatchRunning, 0);
+            if (!IsDisposed && IsHandleCreated)
+                BeginInvoke(RefreshPatchStatus);
+        }
     }
 
     private void RestoreMedalOriginal()
@@ -795,11 +906,9 @@ public sealed class MainForm : Form
     private void UpdateStatusUi()
     {
         var active = _watcher.IsRunning;
-        _statusLabel.Text = active
-            ? "Auto-Import: AKTIV – warte auf neue ShadowPlay-Clips"
-            : "Auto-Import: PAUSIERT";
+        _statusLabel.Text = active ? "Auto-Import: AKTIV" : "Auto-Import: PAUSIERT";
         _statusLabel.ForeColor = active ? Color.FromArgb(74, 222, 128) : AccentAmber;
-        _toggleButton.Text = active ? "Auto-Import pausieren" : "Auto-Import starten";
+        _toggleButton.Text = active ? "Pausieren" : "Starten";
         _trayToggleItem.Text = active ? "Auto-Import pausieren" : "Auto-Import starten";
         _trayIcon.Icon = active ? _trayActiveIcon : _trayPausedIcon;
         _trayIcon.Text = active ? "reMedal (Auto-Import aktiv)" : "reMedal (Auto-Import pausiert)";
@@ -926,4 +1035,65 @@ public sealed class MainForm : Form
 
     [DllImport("dwmapi.dll", PreserveSig = true)]
     private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
+    private sealed class DarkComboBox : ComboBox
+    {
+        private const int WM_PAINT = 0x000F;
+        private readonly Color _bg;
+        private readonly Color _fg;
+        private readonly Color _border;
+        private readonly Color _highlight;
+
+        public DarkComboBox(Color bg, Color fg, Color border, Color highlight)
+        {
+            _bg = bg;
+            _fg = fg;
+            _border = border;
+            _highlight = highlight;
+            DropDownStyle = ComboBoxStyle.DropDownList;
+            FlatStyle = FlatStyle.Flat;
+            DrawMode = DrawMode.OwnerDrawFixed;
+            BackColor = bg;
+            ForeColor = fg;
+        }
+
+        protected override void OnDrawItem(DrawItemEventArgs e)
+        {
+            if (e.Index < 0 || e.Index >= Items.Count) return;
+            var selected = (e.State & DrawItemState.Selected) != 0;
+            using var bgBrush = new SolidBrush(selected ? _highlight : _bg);
+            e.Graphics.FillRectangle(bgBrush, e.Bounds);
+            TextRenderer.DrawText(
+                e.Graphics,
+                GetItemText(Items[e.Index]),
+                Font,
+                new Rectangle(e.Bounds.X + 4, e.Bounds.Y, e.Bounds.Width - 6, e.Bounds.Height),
+                _fg,
+                TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            base.WndProc(ref m);
+            if (m.Msg == WM_PAINT)
+            {
+                using var g = Graphics.FromHwnd(Handle);
+                using var bgBrush = new SolidBrush(_bg);
+                g.FillRectangle(bgBrush, Width - 20, 1, 19, Height - 2);
+                using var borderPen = new Pen(_border, 1);
+                using var innerPen = new Pen(_bg, 2);
+                g.DrawRectangle(innerPen, 1, 1, Width - 3, Height - 3);
+                g.DrawRectangle(borderPen, 0, 0, Width - 1, Height - 1);
+                var arrowX = Width - 14;
+                var arrowY = Height / 2 - 2;
+                using var arrowBrush = new SolidBrush(_fg);
+                g.FillPolygon(arrowBrush, new[]
+                {
+                    new Point(arrowX, arrowY),
+                    new Point(arrowX + 8, arrowY),
+                    new Point(arrowX + 4, arrowY + 5)
+                });
+            }
+        }
+    }
 }

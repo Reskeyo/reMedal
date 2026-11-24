@@ -1,5 +1,5 @@
 
-/* REMEDAL_THROWBACK_PATCH_V10 */
+/* REMEDAL_THROWBACK_PATCH_V18 */
 ;(function () {
   if (globalThis.__REMEDAL_THROWBACK_LOADED__) return;
   if (!Array.isArray(process?.argv) || !process.argv.includes("--renderer_name=main")) return;
@@ -11,9 +11,12 @@
     ? Math.min(90, Math.round(REMEDAL_CFG.windowDays))
     : 0;
   const CFG_BLOCK_ADS = REMEDAL_CFG?.blockAds !== false;
-  const CFG_MAX_YEARS = REMEDAL_CFG?.onlyLastYear ? 1 : 6;
+  const CFG_MAX_YEARS = (typeof REMEDAL_CFG?.maxYears === "number" && REMEDAL_CFG.maxYears >= 1)
+    ? Math.min(10, Math.round(REMEDAL_CFG.maxYears))
+    : (REMEDAL_CFG?.onlyLastYear ? 1 : 10);
+  const CFG_ICON_URI = typeof REMEDAL_CFG?.iconDataUri === "string" ? REMEDAL_CFG.iconDataUri : "";
 
-  console.info("[reMedal] V10 loaded", { windowDays: CFG_WINDOW_DAYS, blockAds: CFG_BLOCK_ADS, maxYears: CFG_MAX_YEARS });
+  console.info("[reMedal] V18 loaded", { windowDays: CFG_WINDOW_DAYS, blockAds: CFG_BLOCK_ADS, maxYears: CFG_MAX_YEARS });
 
   const STORY_ITEM_ID = "remedal-throwback-story";
   const MODAL_ID = "remedal-throwbacks-story-modal";
@@ -227,8 +230,110 @@
 
     const style = document.createElement("style");
     style.id = ADBLOCK_STYLE_ID;
-    style.textContent = `${selectors} {\n  display: none !important;\n  width: 0 !important;\n  height: 0 !important;\n  pointer-events: none !important;\n}`;
+    style.textContent = [
+      `${selectors} { display: none !important; width: 0 !important; height: 0 !important; pointer-events: none !important; }`,
+      ".remedal-ad-tile { position: relative !important; }",
+      ".remedal-ad-hover { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; pointer-events: none; opacity: 0; transition: opacity 0.18s ease; z-index: 2; }",
+      ".remedal-ad-tile:hover .remedal-ad-hover { opacity: 0.88; }"
+    ].join("\n");
     document.head.appendChild(style);
+  }
+
+  const AD_ATTR_RE = /(?:^|[-_\s])(ad|ads|advert|advertisement|adbox|adslot|adunit|adbanner|adcontainer|playwire|nitropay)(?:$|[-_\s])/i;
+  const AD_TEXT_RE = /^(ad|ads|advertisement|werbung|sponsored|report ads?|remove ads?|werbung melden|werbung entfernen|go ad[- ]?free|upgrade.*ads?|hide ads?|×|x|\s)*$/i;
+  const AD_LABEL_EXACT_RE = /^(report ads?|remove ads?|werbung melden|werbung entfernen)$/i;
+
+  function collapseToSpacer(node) {
+    node.style.setProperty("height", "24px", "important");
+    node.style.setProperty("min-height", "24px", "important");
+    node.style.setProperty("max-height", "24px", "important");
+    node.style.setProperty("margin", "0", "important");
+    node.style.setProperty("padding", "0", "important");
+    node.style.setProperty("background", "transparent", "important");
+    node.style.setProperty("border", "none", "important");
+    node.style.setProperty("box-shadow", "none", "important");
+    node.style.setProperty("overflow", "hidden", "important");
+    node.style.setProperty("pointer-events", "none", "important");
+    for (const ch of node.children) {
+      ch.style.setProperty("display", "none", "important");
+    }
+  }
+
+  function isSafeAdWrapper(node, childNode) {
+    if (!node || node.id === "root") return false;
+    const tag = node.tagName;
+    if (tag === "BODY" || tag === "HTML" || tag === "MAIN" || tag === "NAV" || tag === "HEADER") return false;
+    if (node.querySelector("video, canvas, input, textarea, [data-testid='story-avatar-card']")) return false;
+    // Stop if node contains any real app image (ignore our own hover icon)
+    const imgs = node.querySelectorAll("img:not(.remedal-ad-icon)");
+    if (imgs.length > 0) return false;
+
+    const attrText = `${node.id || ""} ${typeof node.className === "string" ? node.className : ""} ${node.getAttribute("data-testid") || ""}`;
+    if (AD_ATTR_RE.test(attrText) && (node.textContent || "").trim().length <= 120) return true;
+
+    const otherVisible = Array.from(node.children).filter(
+      (ch) => ch !== childNode && !ch.classList?.contains("remedal-ad-hover") && ch.tagName !== "STYLE" && ch.tagName !== "SCRIPT" && ch.style.display !== "none"
+    );
+    if (otherVisible.length === 0) return true;
+
+    const txt = (node.textContent || "").trim();
+    return txt.length <= 80 && AD_TEXT_RE.test(txt);
+  }
+
+  function findAdTileRoot(el) {
+    let best = null;
+    let child = el;
+    let cur = el.parentElement;
+    for (let depth = 0; depth < 7 && cur; depth++) {
+      if (!isSafeAdWrapper(cur, child)) break;
+      best = cur;
+      child = cur;
+      cur = cur.parentElement;
+    }
+    return best;
+  }
+
+  function isClipGridAdTile(tile) {
+    let container = tile?.parentElement;
+    for (let i = 0; i < 2 && container; i++) {
+      const style = getComputedStyle(container);
+      const isRowOrGrid = style.display === "grid" || (style.display === "flex" && !style.flexDirection.startsWith("column"));
+      if (isRowOrGrid) {
+        const clipImgs = container.querySelectorAll("img:not(.remedal-ad-icon)");
+        if (clipImgs.length >= 2) return true;
+      }
+      container = container.parentElement;
+    }
+    return false;
+  }
+
+  function attachHoverBadge(tile) {
+    if (!tile || !CFG_ICON_URI) return;
+    tile.classList.add("remedal-ad-tile");
+    if (tile.querySelector(".remedal-ad-hover")) return;
+    const badge = document.createElement("div");
+    badge.className = "remedal-ad-hover";
+    const icon = document.createElement("img");
+    icon.className = "remedal-ad-icon";
+    icon.src = CFG_ICON_URI;
+    icon.alt = "reMedal";
+    icon.style.cssText = "width:42px;height:42px;border-radius:10px;filter:drop-shadow(0 2px 8px rgba(0,0,0,0.65));";
+    const lbl = document.createElement("span");
+    lbl.textContent = "No Ads";
+    lbl.style.cssText = "color:rgba(255,255,255,0.72);font-size:12px;font-weight:600;letter-spacing:0.03em;font-family:system-ui,-apple-system,Segoe UI,sans-serif;";
+    badge.appendChild(icon);
+    badge.appendChild(lbl);
+    tile.appendChild(badge);
+  }
+
+  function handleAdContainer(el) {
+    const tile = findAdTileRoot(el);
+    if (!tile) return;
+    if (isClipGridAdTile(tile)) {
+      attachHoverBadge(tile);
+    } else {
+      collapseToSpacer(tile);
+    }
   }
 
   function neutralizeAdElement(el) {
@@ -243,16 +348,7 @@
       // Ignore read-only property errors
     }
     el.style.setProperty("display", "none", "important");
-
-    const parent = el.parentElement;
-    if (parent && parent.id !== "root" && parent.tagName !== "BODY" && parent.tagName !== "MAIN") {
-      const hasOtherVisible = Array.from(parent.children).some(
-        (ch) => ch !== el && ch.tagName !== "STYLE" && ch.tagName !== "SCRIPT"
-      );
-      if (!hasOtherVisible) {
-        parent.style.setProperty("display", "none", "important");
-      }
-    }
+    handleAdContainer(el);
   }
 
   function sweepAdElements(rootNode) {
@@ -266,6 +362,16 @@
     }
     const list = rootNode.querySelectorAll("webview, iframe");
     for (const el of list) neutralizeAdElement(el);
+
+    const controls = rootNode.querySelectorAll("button, a, span");
+    for (const ctrl of controls) {
+      if (ctrl.children.length > 1) continue;
+      const txt = (ctrl.textContent || "").trim();
+      if (txt.length >= 8 && txt.length <= 24 && AD_LABEL_EXACT_RE.test(txt)) {
+        ctrl.style.setProperty("display", "none", "important");
+        handleAdContainer(ctrl);
+      }
+    }
   }
 
   // --- Fullscreen Story Viewer Modal with Medal-style Controls ---
@@ -307,7 +413,8 @@
     const topOverlay = document.createElement("div");
     topOverlay.style.cssText = [
       "position:absolute;top:0;left:0;right:0;z-index:5;padding:12px 16px 24px 16px;",
-      "background:linear-gradient(180deg,rgba(0,0,0,0.78) 0%,rgba(0,0,0,0) 100%);pointer-events:none;"
+      "background:linear-gradient(180deg,rgba(0,0,0,0.78) 0%,rgba(0,0,0,0) 100%);pointer-events:none;",
+      "opacity:1;transition:opacity 0.25s ease;"
     ].join("");
 
     const progressRow = document.createElement("div");
@@ -323,7 +430,7 @@
         if (targetIdx >= 0) loadClip(targetIdx);
       };
       const fill = document.createElement("div");
-      fill.style.cssText = "height:100%;width:0%;background:#facc15;transition:width 0.08s linear;";
+      fill.style.cssText = "height:100%;width:0%;background:#facc15;will-change:width;";
       track.appendChild(fill);
       progressRow.appendChild(track);
       barTracks.push(track);
@@ -342,9 +449,24 @@
     const countBadge = document.createElement("span");
     countBadge.style.cssText = "color:#e2e8f0;font-size:12px;font-weight:600;";
 
+    const svgIcon = (body, size = 16, filled = false) =>
+      `<svg viewBox="0 0 24 24" width="${size}" height="${size}" ${filled ? 'fill="currentColor"' : 'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"'} style="display:block;flex-shrink:0;">${body}</svg>`;
+    const ICON_PLAY = svgIcon('<path d="M8 5.14v14l11-7-11-7z"/>', 17, true);
+    const ICON_PAUSE = svgIcon('<path d="M6 5h4v14H6zm8 0h4v14h-4z"/>', 17, true);
+    const ICON_VOL_ON = svgIcon('<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>', 17);
+    const ICON_VOL_OFF = svgIcon('<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>', 17);
+    const ICON_LINK = svgIcon('<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>', 15);
+    const ICON_CHECK = svgIcon('<polyline points="20 6 9 17 4 12"/>', 15);
+    const ICON_EXT = svgIcon('<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>', 16);
+    const ICON_GEAR = svgIcon('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>', 16);
+    const ICON_FS = svgIcon('<path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>', 16);
+    const ICON_CLOSE = svgIcon('<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>', 16);
+    const ICON_PREV = svgIcon('<polyline points="15 18 9 12 15 6"/>', 20);
+    const ICON_NEXT = svgIcon('<polyline points="9 18 15 12 9 6"/>', 20);
+
     const closeBtn = document.createElement("button");
-    closeBtn.style.cssText = "background:rgba(15,23,42,0.75);border:1px solid rgba(255,255,255,0.18);color:#f8fafc;width:32px;height:32px;border-radius:8px;cursor:pointer;font-size:15px;";
-    closeBtn.textContent = "✕";
+    closeBtn.style.cssText = "background:rgba(15,23,42,0.75);border:1px solid rgba(255,255,255,0.18);color:#f8fafc;width:32px;height:32px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;";
+    closeBtn.innerHTML = ICON_CLOSE;
 
     rightHeader.appendChild(countBadge);
     rightHeader.appendChild(closeBtn);
@@ -367,82 +489,101 @@
     emptyMsg.style.cssText = "display:none;color:#cbd5e1;font-size:14px;text-align:center;padding:24px;";
     emptyMsg.textContent = "Keine abspielbaren hochgeladenen Clips gefunden.";
 
+    if (!document.getElementById("remedal-spinner-css")) {
+      const spinStyle = document.createElement("style");
+      spinStyle.id = "remedal-spinner-css";
+      spinStyle.textContent = "@keyframes remedal-spin{to{transform:rotate(360deg)}}";
+      (document.head || document.documentElement).appendChild(spinStyle);
+    }
+    const spinnerOverlay = document.createElement("div");
+    spinnerOverlay.style.cssText = "position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;z-index:4;";
+    const spinnerRing = document.createElement("div");
+    spinnerRing.style.cssText = "width:38px;height:38px;border:3px solid rgba(255,255,255,0.22);border-top-color:#ffffff;border-radius:50%;animation:remedal-spin 0.75s linear infinite;";
+    spinnerOverlay.appendChild(spinnerRing);
+    const setLoading = (on) => { spinnerOverlay.style.display = on ? "flex" : "none"; };
+
     const prevZone = document.createElement("div");
     prevZone.title = "Vorheriger Clip (←)";
-    prevZone.style.cssText = "position:absolute;left:0;top:64px;bottom:118px;width:14%;z-index:3;cursor:pointer;display:flex;align-items:center;padding-left:14px;";
+    prevZone.style.cssText = "position:absolute;left:0;top:64px;bottom:96px;width:14%;z-index:3;cursor:pointer;display:flex;align-items:center;padding-left:14px;";
     const prevHint = document.createElement("span");
-    prevHint.textContent = "‹";
-    prevHint.style.cssText = "width:38px;height:38px;border-radius:999px;background:rgba(0,0,0,0.52);color:#fff;font-size:24px;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity 0.15s;";
+    prevHint.innerHTML = ICON_PREV;
+    prevHint.style.cssText = "width:38px;height:38px;border-radius:999px;background:rgba(0,0,0,0.52);color:#fff;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity 0.15s;";
     prevZone.appendChild(prevHint);
     prevZone.onmouseenter = () => { if (idx > 0) prevHint.style.opacity = "1"; };
     prevZone.onmouseleave = () => { prevHint.style.opacity = "0"; };
 
     const nextZone = document.createElement("div");
     nextZone.title = "Nächster Clip (→)";
-    nextZone.style.cssText = "position:absolute;right:0;top:64px;bottom:118px;width:14%;z-index:3;cursor:pointer;display:flex;align-items:center;justify-content:flex-end;padding-right:14px;";
+    nextZone.style.cssText = "position:absolute;right:0;top:64px;bottom:96px;width:14%;z-index:3;cursor:pointer;display:flex;align-items:center;justify-content:flex-end;padding-right:14px;";
     const nextHint = document.createElement("span");
-    nextHint.textContent = "›";
-    nextHint.style.cssText = "width:38px;height:38px;border-radius:999px;background:rgba(0,0,0,0.52);color:#fff;font-size:24px;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity 0.15s;";
+    nextHint.innerHTML = ICON_NEXT;
+    nextHint.style.cssText = "width:38px;height:38px;border-radius:999px;background:rgba(0,0,0,0.52);color:#fff;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity 0.15s;";
     nextZone.appendChild(nextHint);
     nextZone.onmouseenter = () => { if (idx < playable.length - 1) nextHint.style.opacity = "1"; };
     nextZone.onmouseleave = () => { nextHint.style.opacity = "0"; };
 
-    // Medal-style docked control overlay
+    // Sleek Medal-style bottom control overlay
     const ctrlOverlay = document.createElement("div");
     ctrlOverlay.style.cssText = [
-      "position:absolute;left:0;right:0;bottom:0;z-index:6;padding:34px 18px 14px 18px;",
-      "background:linear-gradient(180deg,rgba(0,0,0,0) 0%,rgba(9,11,16,0.88) 42%,rgba(9,11,16,0.97) 100%);",
-      "display:flex;flex-direction:column;gap:8px;"
+      "position:absolute;left:0;right:0;bottom:0;z-index:6;padding:32px 16px 12px 16px;",
+      "background:linear-gradient(180deg,rgba(0,0,0,0) 0%,rgba(0,0,0,0.58) 45%,rgba(0,0,0,0.9) 100%);",
+      "display:flex;flex-direction:column;gap:6px;opacity:1;transition:opacity 0.25s ease;"
     ].join("");
     ctrlOverlay.onclick = (e) => e.stopPropagation();
 
-    // Title + Game/Date row
     const titleRow = document.createElement("div");
     titleRow.style.cssText = "display:flex;align-items:baseline;justify-content:space-between;gap:12px;";
     const ctrlTitle = document.createElement("div");
-    ctrlTitle.style.cssText = "color:#ffffff;font-size:15px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+    ctrlTitle.style.cssText = "color:#ffffff;font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 3px rgba(0,0,0,0.7);";
     const ctrlSub = document.createElement("div");
-    ctrlSub.style.cssText = "color:#cbd5e1;font-size:12px;white-space:nowrap;flex-shrink:0;";
+    ctrlSub.style.cssText = "color:rgba(255,255,255,0.76);font-size:12px;white-space:nowrap;flex-shrink:0;text-shadow:0 1px 3px rgba(0,0,0,0.7);";
     titleRow.appendChild(ctrlTitle);
     titleRow.appendChild(ctrlSub);
 
-    // Seek bar
-    const seekBar = document.createElement("input");
-    seekBar.type = "range";
-    seekBar.min = "0";
-    seekBar.max = "1000";
-    seekBar.value = "0";
-    seekBar.style.cssText = "width:100%;height:5px;accent-color:#facc15;cursor:pointer;margin:0;";
+    // Custom white smooth seek bar (Medal style)
+    const seekHit = document.createElement("div");
+    seekHit.style.cssText = "position:relative;height:16px;display:flex;align-items:center;cursor:pointer;user-select:none;";
+    const seekTrack = document.createElement("div");
+    seekTrack.style.cssText = "position:relative;width:100%;height:3px;background:rgba(255,255,255,0.28);border-radius:99px;transition:height 0.12s ease;";
+    const seekFill = document.createElement("div");
+    seekFill.style.cssText = "position:absolute;left:0;top:0;bottom:0;width:0%;background:#ffffff;border-radius:99px;pointer-events:none;will-change:width;";
+    const seekThumb = document.createElement("div");
+    seekThumb.style.cssText = "position:absolute;top:50%;left:0%;width:12px;height:12px;border-radius:50%;background:#ffffff;transform:translate(-50%,-50%) scale(0);transition:transform 0.12s ease;box-shadow:0 1px 4px rgba(0,0,0,0.55);pointer-events:none;will-change:left;";
+    seekTrack.appendChild(seekFill);
+    seekTrack.appendChild(seekThumb);
+    seekHit.appendChild(seekTrack);
 
     // Controls row
     const ctrlRow = document.createElement("div");
-    ctrlRow.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;";
+    ctrlRow.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:10px;";
 
     const leftCtrls = document.createElement("div");
-    leftCtrls.style.cssText = "display:flex;align-items:center;gap:8px;";
+    leftCtrls.style.cssText = "display:flex;align-items:center;gap:10px;";
 
-    const btnCss = "background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.14);color:#f8fafc;height:30px;padding:0 10px;border-radius:7px;cursor:pointer;font-size:12px;font-weight:600;display:inline-flex;align-items:center;gap:5px;";
-    const selectCss = "background:#151a24;border:1px solid rgba(255,255,255,0.16);color:#f8fafc;height:30px;padding:0 8px;border-radius:7px;cursor:pointer;font-size:12px;font-weight:600;";
+    const iconBtnCss = "background:transparent;border:none;color:#ffffff;width:30px;height:30px;padding:0;border-radius:6px;cursor:pointer;font-size:15px;display:inline-flex;align-items:center;justify-content:center;opacity:0.9;";
+    const selectCss = "background:#141822;border:1px solid rgba(255,255,255,0.18);color:#f8fafc;height:28px;padding:0 8px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;width:100%;";
 
     const playPauseBtn = document.createElement("button");
-    playPauseBtn.style.cssText = "background:#facc15;border:none;color:#0f172a;height:30px;min-width:34px;padding:0 10px;border-radius:7px;cursor:pointer;font-size:13px;font-weight:800;";
-    playPauseBtn.textContent = "⏸";
+    playPauseBtn.title = "Play / Pause (Space)";
+    playPauseBtn.style.cssText = iconBtnCss;
+    playPauseBtn.innerHTML = ICON_PAUSE;
 
     const timeLabel = document.createElement("span");
-    timeLabel.style.cssText = "color:#e2e8f0;font-size:12px;font-variant-numeric:tabular-nums;min-width:86px;";
-    timeLabel.textContent = "0:00 / 0:00";
+    timeLabel.style.cssText = "color:rgba(255,255,255,0.92);font-size:12px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:0.02em;";
+    timeLabel.textContent = "00:00 / 00:00";
 
     const muteBtn = document.createElement("button");
-    muteBtn.style.cssText = btnCss;
-    muteBtn.textContent = (isMuted || currentVol === 0) ? "🔇" : "🔊";
+    muteBtn.title = "Ton an/aus (M)";
+    muteBtn.style.cssText = iconBtnCss;
+    muteBtn.innerHTML = (isMuted || currentVol === 0) ? ICON_VOL_OFF : ICON_VOL_ON;
 
     const volSlider = document.createElement("input");
     volSlider.type = "range";
     volSlider.min = "0";
     volSlider.max = "1";
-    volSlider.step = "0.05";
+    volSlider.step = "0.02";
     volSlider.value = String(currentVol);
-    volSlider.style.cssText = "width:74px;height:4px;accent-color:#facc15;cursor:pointer;";
+    volSlider.style.cssText = "width:68px;height:3px;accent-color:#ffffff;cursor:pointer;";
 
     leftCtrls.appendChild(playPauseBtn);
     leftCtrls.appendChild(timeLabel);
@@ -450,14 +591,54 @@
     leftCtrls.appendChild(volSlider);
 
     const rightCtrls = document.createElement("div");
-    rightCtrls.style.cssText = "display:flex;align-items:center;gap:8px;";
+    rightCtrls.style.cssText = "display:flex;align-items:center;gap:6px;position:relative;";
 
+    const copyLinkBtn = document.createElement("button");
+    copyLinkBtn.title = "Link teilen / kopieren";
+    copyLinkBtn.style.cssText = "background:rgba(255,255,255,0.16);border:1px solid rgba(255,255,255,0.24);color:#ffffff;height:32px;padding:0 13px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:700;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;";
+    copyLinkBtn.innerHTML = `${ICON_LINK}<span>Link teilen</span>`;
+
+    const openMedalBtn = document.createElement("button");
+    openMedalBtn.title = "In Medal öffnen";
+    openMedalBtn.style.cssText = iconBtnCss;
+    openMedalBtn.innerHTML = ICON_EXT;
+
+    const settingsBtn = document.createElement("button");
+    settingsBtn.title = "Einstellungen";
+    settingsBtn.style.cssText = iconBtnCss;
+    settingsBtn.innerHTML = ICON_GEAR;
+
+    const fsBtn = document.createElement("button");
+    fsBtn.title = "Vollbild (F)";
+    fsBtn.style.cssText = iconBtnCss;
+    fsBtn.innerHTML = ICON_FS;
+
+    // Settings popover (Quality + Speed)
+    const settingsPopover = document.createElement("div");
+    settingsPopover.style.cssText = [
+      "position:absolute;bottom:40px;right:0;background:rgba(14,17,24,0.96);",
+      "border:1px solid rgba(255,255,255,0.16);border-radius:10px;padding:10px 12px;",
+      "display:none;flex-direction:column;gap:8px;min-width:172px;z-index:8;",
+      "box-shadow:0 8px 24px rgba(0,0,0,0.55);"
+    ].join("");
+    settingsPopover.onclick = (e) => e.stopPropagation();
+
+    const qWrap = document.createElement("div");
+    qWrap.style.cssText = "display:flex;flex-direction:column;gap:4px;";
+    const qLbl = document.createElement("span");
+    qLbl.textContent = "Qualität";
+    qLbl.style.cssText = "color:rgba(255,255,255,0.7);font-size:11px;font-weight:600;";
     const qualitySelect = document.createElement("select");
-    qualitySelect.title = "Videoqualität";
     qualitySelect.style.cssText = selectCss;
+    qWrap.appendChild(qLbl);
+    qWrap.appendChild(qualitySelect);
 
+    const sWrap = document.createElement("div");
+    sWrap.style.cssText = "display:flex;flex-direction:column;gap:4px;";
+    const sLbl = document.createElement("span");
+    sLbl.textContent = "Geschwindigkeit";
+    sLbl.style.cssText = "color:rgba(255,255,255,0.7);font-size:11px;font-weight:600;";
     const speedSelect = document.createElement("select");
-    speedSelect.title = "Geschwindigkeit";
     speedSelect.style.cssText = selectCss;
     for (const sp of [0.5, 1, 1.5, 2]) {
       const opt = document.createElement("option");
@@ -466,34 +647,27 @@
       if (sp === 1) opt.selected = true;
       speedSelect.appendChild(opt);
     }
+    sWrap.appendChild(sLbl);
+    sWrap.appendChild(speedSelect);
 
-    const copyLinkBtn = document.createElement("button");
-    copyLinkBtn.style.cssText = btnCss;
-    copyLinkBtn.textContent = "🔗 Link teilen";
+    settingsPopover.appendChild(qWrap);
+    settingsPopover.appendChild(sWrap);
 
-    const openMedalBtn = document.createElement("button");
-    openMedalBtn.style.cssText = btnCss;
-    openMedalBtn.textContent = "↗ Öffnen";
-
-    const fsBtn = document.createElement("button");
-    fsBtn.title = "Vollbild";
-    fsBtn.style.cssText = btnCss;
-    fsBtn.textContent = "⛶";
-
-    rightCtrls.appendChild(qualitySelect);
-    rightCtrls.appendChild(speedSelect);
     rightCtrls.appendChild(copyLinkBtn);
     rightCtrls.appendChild(openMedalBtn);
+    rightCtrls.appendChild(settingsBtn);
     rightCtrls.appendChild(fsBtn);
+    rightCtrls.appendChild(settingsPopover);
 
     ctrlRow.appendChild(leftCtrls);
     ctrlRow.appendChild(rightCtrls);
 
     ctrlOverlay.appendChild(titleRow);
-    ctrlOverlay.appendChild(seekBar);
+    ctrlOverlay.appendChild(seekHit);
     ctrlOverlay.appendChild(ctrlRow);
 
     stage.appendChild(video);
+    stage.appendChild(spinnerOverlay);
     stage.appendChild(emptyMsg);
     stage.appendChild(prevZone);
     stage.appendChild(nextZone);
@@ -503,11 +677,69 @@
     card.appendChild(topOverlay);
     overlay.appendChild(card);
 
+    let rafId = 0;
+    let isSeeking = false;
+    let isHoveringSeek = false;
+    let isHoveringCtrls = false;
+    let settingsOpen = false;
+    let idleTimer = null;
+
     function fmtTime(sec) {
-      if (!Number.isFinite(sec) || sec < 0) return "0:00";
+      if (!Number.isFinite(sec) || sec < 0) return "00:00";
       const m = Math.floor(sec / 60);
       const s = Math.floor(sec % 60);
-      return `${m}:${s < 10 ? "0" : ""}${s}`;
+      return `${m < 10 ? "0" : ""}${m}:${s < 10 ? "0" : ""}${s}`;
+    }
+
+    function updateSeekVisuals() {
+      const expanded = isHoveringSeek || isSeeking;
+      seekTrack.style.height = expanded ? "5px" : "3px";
+      seekThumb.style.transform = expanded ? "translate(-50%,-50%) scale(1)" : "translate(-50%,-50%) scale(0)";
+    }
+
+    function syncProgress(overrideRatio) {
+      const dur = video.duration;
+      if (!Number.isFinite(dur) || dur <= 0) return;
+      const ratio = typeof overrideRatio === "number"
+        ? Math.max(0, Math.min(1, overrideRatio))
+        : Math.max(0, Math.min(1, video.currentTime / dur));
+      const pct = (ratio * 100).toFixed(3) + "%";
+      if (barFills[idx]) barFills[idx].style.width = pct;
+      seekFill.style.width = pct;
+      seekThumb.style.left = pct;
+      timeLabel.textContent = `${fmtTime(ratio * dur)} / ${fmtTime(dur)}`;
+    }
+
+    function stopProgressLoop() {
+      if (rafId) {
+        cancelAnimationFrame(rafId);
+        rafId = 0;
+      }
+    }
+
+    function startProgressLoop() {
+      stopProgressLoop();
+      const tick = () => {
+        if (!isSeeking) syncProgress();
+        if (!video.paused && !video.ended) {
+          rafId = requestAnimationFrame(tick);
+        } else {
+          rafId = 0;
+        }
+      };
+      rafId = requestAnimationFrame(tick);
+    }
+
+    function showControlsTemporarily() {
+      ctrlOverlay.style.opacity = "1";
+      topOverlay.style.opacity = "1";
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        if (!video.paused && !isHoveringCtrls && !isSeeking && !settingsOpen) {
+          ctrlOverlay.style.opacity = "0";
+          topOverlay.style.opacity = "0";
+        }
+      }, 2200);
     }
 
     function populateQualities(clip) {
@@ -520,11 +752,12 @@
         qualitySelect.appendChild(opt);
       }
       qualitySelect.value = "0";
-      qualitySelect.style.display = clip.qualities.length > 0 ? "inline-block" : "none";
+      qWrap.style.display = clip.qualities.length > 0 ? "flex" : "none";
     }
 
     function loadClip(newIdx) {
       if (!playable.length) {
+        stopProgressLoop();
         video.style.display = "none";
         emptyMsg.style.display = "block";
         pill.textContent = "RÜCKBLICK";
@@ -549,30 +782,65 @@
       ctrlTitle.textContent = clip.title;
       ctrlSub.textContent = `${formatDate(clip.createdAt)}${clip.game ? " • " + clip.game : ""}`;
       countBadge.textContent = `${idx + 1} / ${playable.length}`;
-      timeLabel.textContent = "0:00 / 0:00";
-      seekBar.value = "0";
-      copyLinkBtn.textContent = "🔗 Link teilen";
+      timeLabel.textContent = "00:00 / 00:00";
+      seekFill.style.width = "0%";
+      seekThumb.style.left = "0%";
+      copyLinkBtn.innerHTML = `${ICON_LINK}<span>Link teilen</span>`;
+      settingsOpen = false;
+      settingsPopover.style.display = "none";
 
       populateQualities(clip);
       video.dataset.qIdx = "0";
       video.dataset.watchedMarked = "";
+      setLoading(true);
       video.src = clip.qualities[0].url;
       video.muted = isMuted;
       video.volume = currentVol;
       video.playbackRate = currentRate;
       video.play().catch(() => {});
-      playPauseBtn.textContent = "⏸";
+      playPauseBtn.innerHTML = ICON_PAUSE;
+      showControlsTemporarily();
     }
 
     function togglePlay() {
+      settingsOpen = false;
+      settingsPopover.style.display = "none";
       if (video.paused) {
         video.play().catch(() => {});
       } else {
         video.pause();
       }
+      showControlsTemporarily();
+    }
+
+    function ratioFromPointer(clientX) {
+      const rect = seekHit.getBoundingClientRect();
+      if (rect.width <= 0) return 0;
+      return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    }
+
+    function onSeekMove(e) {
+      if (!isSeeking) return;
+      const r = ratioFromPointer(e.clientX);
+      syncProgress(r);
+      if (Number.isFinite(video.duration) && video.duration > 0) {
+        video.currentTime = r * video.duration;
+      }
+    }
+
+    function onSeekUp() {
+      if (!isSeeking) return;
+      isSeeking = false;
+      updateSeekVisuals();
+      showControlsTemporarily();
+      if (!video.paused) startProgressLoop();
     }
 
     function closeModal() {
+      stopProgressLoop();
+      if (idleTimer) clearTimeout(idleTimer);
+      window.removeEventListener("mousemove", onSeekMove);
+      window.removeEventListener("mouseup", onSeekUp);
       if (document.fullscreenElement === card) {
         document.exitFullscreen().catch(() => {});
       }
@@ -583,9 +851,51 @@
       overlay.remove();
     }
 
-    video.addEventListener("play", () => { playPauseBtn.textContent = "⏸"; });
-    video.addEventListener("pause", () => { playPauseBtn.textContent = "▶"; });
+    seekHit.onmouseenter = () => { isHoveringSeek = true; updateSeekVisuals(); };
+    seekHit.onmouseleave = () => { isHoveringSeek = false; updateSeekVisuals(); };
+    seekHit.onmousedown = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      isSeeking = true;
+      updateSeekVisuals();
+      const r = ratioFromPointer(e.clientX);
+      syncProgress(r);
+      if (Number.isFinite(video.duration) && video.duration > 0) {
+        video.currentTime = r * video.duration;
+      }
+    };
+    window.addEventListener("mousemove", onSeekMove);
+    window.addEventListener("mouseup", onSeekUp);
+
+    ctrlOverlay.onmouseenter = () => { isHoveringCtrls = true; showControlsTemporarily(); };
+    ctrlOverlay.onmouseleave = () => { isHoveringCtrls = false; showControlsTemporarily(); };
+    stage.onmousemove = showControlsTemporarily;
+
+    settingsBtn.onclick = (e) => {
+      e.stopPropagation();
+      settingsOpen = !settingsOpen;
+      settingsPopover.style.display = settingsOpen ? "flex" : "none";
+      showControlsTemporarily();
+    };
+
+    video.addEventListener("play", () => {
+      playPauseBtn.innerHTML = ICON_PAUSE;
+      startProgressLoop();
+      showControlsTemporarily();
+    });
+    video.addEventListener("pause", () => {
+      playPauseBtn.innerHTML = ICON_PLAY;
+      stopProgressLoop();
+      syncProgress();
+      showControlsTemporarily();
+    });
+    video.addEventListener("waiting", () => setLoading(true));
+    video.addEventListener("loadstart", () => setLoading(true));
+    video.addEventListener("canplay", () => setLoading(false));
+    video.addEventListener("loadeddata", () => setLoading(false));
     video.addEventListener("playing", () => {
+      setLoading(false);
+      startProgressLoop();
       const current = playable[idx];
       if (current && !video.dataset.watchedMarked) {
         video.dataset.watchedMarked = "1";
@@ -593,6 +903,8 @@
         refreshStoryCardStyle(clips);
       }
     });
+    video.addEventListener("loadedmetadata", () => syncProgress());
+    video.addEventListener("seeked", () => syncProgress());
 
     video.addEventListener("error", () => {
       if (!playable.length) return;
@@ -614,6 +926,7 @@
         track.remove();
       }
       if (!playable.length) {
+        setLoading(false);
         loadClip(0);
         return;
       }
@@ -624,20 +937,10 @@
       loadClip(idx);
     });
 
-    video.addEventListener("timeupdate", () => {
-      if (video.duration > 0) {
-        const ratio = Math.min(1, video.currentTime / video.duration);
-        if (barFills[idx]) barFills[idx].style.width = (ratio * 100).toFixed(2) + "%";
-        seekBar.value = String(Math.round(ratio * 1000));
-        timeLabel.textContent = `${fmtTime(video.currentTime)} / ${fmtTime(video.duration)}`;
-      }
-    });
-    video.addEventListener("ended", () => loadClip(idx + 1));
-
-    seekBar.addEventListener("input", () => {
-      if (video.duration > 0) {
-        video.currentTime = (Number(seekBar.value) / 1000) * video.duration;
-      }
+    video.addEventListener("timeupdate", () => { if (!isSeeking) syncProgress(); });
+    video.addEventListener("ended", () => {
+      stopProgressLoop();
+      loadClip(idx + 1);
     });
 
     volSlider.addEventListener("input", () => {
@@ -645,7 +948,7 @@
       video.volume = currentVol;
       isMuted = currentVol === 0;
       video.muted = isMuted;
-      muteBtn.textContent = isMuted ? "🔇" : "🔊";
+      muteBtn.innerHTML = isMuted ? ICON_VOL_OFF : ICON_VOL_ON;
       saveVolumePrefs(currentVol, isMuted);
     });
 
@@ -678,8 +981,8 @@
         } else if (navigator.clipboard?.writeText) {
           await navigator.clipboard.writeText(clip.shareUrl);
         }
-        copyLinkBtn.textContent = "✓ Kopiert!";
-        setTimeout(() => { copyLinkBtn.textContent = "🔗 Link teilen"; }, 2000);
+        copyLinkBtn.innerHTML = `${ICON_CHECK}<span>Kopiert!</span>`;
+        setTimeout(() => { copyLinkBtn.innerHTML = `${ICON_LINK}<span>Link teilen</span>`; }, 1800);
       } catch {
         copyLinkBtn.textContent = "Fehler";
       }
@@ -705,7 +1008,7 @@
     muteBtn.onclick = () => {
       isMuted = !isMuted;
       video.muted = isMuted;
-      muteBtn.textContent = isMuted ? "🔇" : "🔊";
+      muteBtn.innerHTML = isMuted ? ICON_VOL_OFF : ICON_VOL_ON;
       saveVolumePrefs(currentVol, isMuted);
     };
     closeBtn.onclick = closeModal;
@@ -728,7 +1031,7 @@
     loadClip(idx);
   }
 
-  // --- Seamless Medal Stories bar integration (exact 82px ring matching story-avatar-card) ---
+  // --- Seamless Medal Stories bar integration (matches native story-avatar-card ring size) ---
   function findStoryAnchor() {
     const own = document.querySelector('[data-testid="story-avatar-card"][data-own-story]');
     if (own) return { el: own, after: true };
@@ -737,7 +1040,28 @@
     return null;
   }
 
-  function applyStoryCardStyle(card, ring, badge, label, clips) {
+  function measureNativeRingSize(anchorEl) {
+    const candidates = [];
+    const peer = document.querySelector('[data-testid="story-avatar-card"]:not([data-own-story])');
+    if (peer) candidates.push(peer);
+    if (anchorEl) candidates.push(anchorEl);
+    for (const root of candidates) {
+      let best = 0;
+      for (const el of root.querySelectorAll("div, span")) {
+        const r = el.getBoundingClientRect();
+        if (r.width >= 72 && r.width <= 112 && Math.abs(r.width - r.height) <= 2) {
+          const br = getComputedStyle(el).borderRadius;
+          if (br && (br.includes("999") || br.includes("50%") || parseFloat(br) >= r.width * 0.45)) {
+            if (r.width > best) best = Math.round(r.width);
+          }
+        }
+      }
+      if (best >= 72) return best;
+    }
+    return 88;
+  }
+
+  function applyStoryCardStyle(card, ring, label, clips) {
     const watched = getWatchedSet();
     const unwatchedCount = clips.filter((c) => !watched.has(c.id)).length;
     const hasUnwatched = unwatchedCount > 0;
@@ -747,15 +1071,11 @@
       card.style.opacity = "1";
       ring.style.background = "linear-gradient(135deg,#facc15,#f97316,#ec4899)";
       ring.style.boxShadow = "0 4px 12px rgba(250,204,21,0.32)";
-      badge.style.background = "#facc15";
-      badge.style.color = "#0f172a";
       label.style.color = "#fde047";
     } else {
       card.style.opacity = "0.72";
       ring.style.background = "#475569";
       ring.style.boxShadow = "none";
-      badge.style.background = "#334155";
-      badge.style.color = "#94a3b8";
       label.style.color = "#94a3b8";
     }
   }
@@ -767,8 +1087,8 @@
     }
   }
 
-  function buildNativeStoryCard(clips) {
-    const first = clips[0];
+  function buildNativeStoryCard(clips, anchorEl) {
+    const ringSize = measureNativeRingSize(anchorEl);
     const card = document.createElement("div");
     card.id = STORY_ITEM_ID;
     card.className = "relative w-24 select-none";
@@ -780,17 +1100,17 @@
     btn.style.cssText = [
       "width:100%;display:flex;flex-direction:column;align-items:center;gap:8px;",
       "background:transparent;border:none;padding:0;cursor:pointer;",
-      "font-family:system-ui,-apple-system,Segoe UI,sans-serif;transition:transform 0.14s ease;"
+      "font-family:system-ui,-apple-system,Segoe UI,sans-serif;"
     ].join("");
-    btn.onmouseenter = () => { btn.style.transform = "scale(1.03)"; };
-    btn.onmouseleave = () => { btn.style.transform = "none"; };
     btn.onclick = () => openStoryModal(clips);
 
     const ring = document.createElement("div");
-    ring.style.cssText = "position:relative;width:82px;height:82px;border-radius:9999px;padding:3px;";
+    ring.style.cssText = `position:relative;box-sizing:border-box;flex-shrink:0;width:${ringSize}px;height:${ringSize}px;border-radius:9999px;padding:3px;`;
 
     const inner = document.createElement("div");
-    inner.style.cssText = "width:100%;height:100%;border-radius:9999px;overflow:hidden;border:3px solid #0b0e14;background:#1e293b;display:flex;align-items:center;justify-content:center;";
+    inner.style.cssText = "width:100%;height:100%;box-sizing:border-box;border-radius:9999px;overflow:hidden;border:2px solid #0b0e14;background:#1e293b;display:flex;align-items:center;justify-content:center;transition:transform 0.14s ease;";
+    btn.onmouseenter = () => { inner.style.transform = "scale(0.93)"; };
+    btn.onmouseleave = () => { inner.style.transform = "none"; };
 
     const thumbSources = [];
     for (const c of clips) {
@@ -822,15 +1142,7 @@
       inner.style.fontSize = "26px";
     }
 
-    const badge = document.createElement("span");
-    badge.textContent = first.yearsAgo === 1 ? "1J" : `${first.yearsAgo}J`;
-    badge.style.cssText = [
-      "position:absolute;bottom:0;right:0;",
-      "font-size:11px;font-weight:800;padding:1px 6px;border-radius:9999px;border:2px solid #0b0e14;"
-    ].join("");
-
     ring.appendChild(inner);
-    ring.appendChild(badge);
 
     const label = document.createElement("span");
     label.textContent = "Rückblick";
@@ -840,8 +1152,8 @@
     btn.appendChild(label);
     card.appendChild(btn);
 
-    card._remedalUpdateStyle = (list) => applyStoryCardStyle(card, ring, badge, label, list);
-    applyStoryCardStyle(card, ring, badge, label, clips);
+    card._remedalUpdateStyle = (list) => applyStoryCardStyle(card, ring, label, list);
+    applyStoryCardStyle(card, ring, label, clips);
     return card;
   }
 
@@ -872,7 +1184,7 @@
     const liveAnchor = findStoryAnchor();
     if (!liveAnchor) return;
 
-    const card = buildNativeStoryCard(clips);
+    const card = buildNativeStoryCard(clips, liveAnchor.el);
     liveAnchor.el.insertAdjacentElement(liveAnchor.after ? "afterend" : "beforebegin", card);
   }
 

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Drawing.Imaging;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
@@ -15,7 +16,7 @@ public enum PatchStatus
 
 public static class MedalAsarPatcher
 {
-    public const string PatchMarker = "/* REMEDAL_THROWBACK_PATCH_V10 */";
+    public const string PatchMarker = "/* REMEDAL_THROWBACK_PATCH_V18 */";
     private const string AnyPatchPrefix = "/* REMEDAL_THROWBACK_PATCH_";
 
     public static string? FindAppAsar()
@@ -51,7 +52,7 @@ public static class MedalAsarPatcher
         string? asarPath = null,
         int throwbackWindowDays = 0,
         bool blockAdsEnabled = true,
-        bool onlyLastYear = false)
+        int maxYears = 0)
     {
         asarPath ??= FindAppAsar();
         if (asarPath is null || !File.Exists(asarPath))
@@ -74,12 +75,18 @@ public static class MedalAsarPatcher
                 preloadText = preloadText[..idx].TrimEnd();
         }
 
-        var cfgJson = JsonSerializer.Serialize(new { windowDays = throwbackWindowDays, blockAds = blockAdsEnabled, onlyLastYear });
+        var cfgJson = JsonSerializer.Serialize(new
+        {
+            windowDays = throwbackWindowDays,
+            blockAds = blockAdsEnabled,
+            maxYears,
+            iconDataUri = LoadAppIconDataUri()
+        });
         var injectJs = LoadInjectScript().Replace("__REMEDAL_CONFIG_JSON__", cfgJson, StringComparison.Ordinal);
         var patchedBytes = Encoding.UTF8.GetBytes(preloadText + "\n" + injectJs);
 
         AsarArchive.ReplaceFile(asarPath, "preload.min.js", patchedBytes);
-        return (true, "Rückblicke- & AdBlock-Patch (V10) erfolgreich in Medal installiert. Bitte Medal neu starten.");
+        return (true, "Rückblicke- & AdBlock-Patch (V18) erfolgreich in Medal installiert. Bitte Medal neu starten.");
     }
 
     public static (bool Ok, string Message) RestoreOriginal(string? asarPath = null)
@@ -114,12 +121,17 @@ public static class MedalAsarPatcher
 
     public static bool IsMedalRunning() => Process.GetProcessesByName("Medal").Length > 0;
 
-    public static void RestartMedal()
+    public static void KillMedal()
     {
         foreach (var p in Process.GetProcessesByName("Medal"))
         {
             try { p.Kill(entireProcessTree: true); p.WaitForExit(3000); } catch { }
         }
+    }
+
+    public static void RestartMedal()
+    {
+        KillMedal();
 
         var medalExe = Path.Combine(MedalEnvironment.MedalLocalDir, "Medal.exe");
         if (!File.Exists(medalExe))
@@ -127,6 +139,28 @@ public static class MedalAsarPatcher
 
         if (File.Exists(medalExe))
             Process.Start(new ProcessStartInfo(medalExe) { UseShellExecute = true });
+    }
+
+    private static string LoadAppIconDataUri()
+    {
+        try
+        {
+            var asm = Assembly.GetExecutingAssembly();
+            var resName = asm.GetManifestResourceNames()
+                .FirstOrDefault(r => r.EndsWith(".remedal.ico", StringComparison.OrdinalIgnoreCase));
+            if (resName is null) return "";
+            using var stream = asm.GetManifestResourceStream(resName);
+            if (stream is null) return "";
+            using var icon = new Icon(stream, 48, 48);
+            using var bmp = icon.ToBitmap();
+            using var ms = new MemoryStream();
+            bmp.Save(ms, ImageFormat.Png);
+            return "data:image/png;base64," + Convert.ToBase64String(ms.ToArray());
+        }
+        catch
+        {
+            return "";
+        }
     }
 
     private static string LoadInjectScript()

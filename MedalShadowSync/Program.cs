@@ -139,18 +139,19 @@ internal static class Program
                 MedalAsarPatcher.RestoreOriginal(tempAsar);
                 var cleanLen = new FileInfo(tempAsar).Length;
 
-                var (okPatch, msgPatch) = MedalAsarPatcher.ApplyPatch(tempAsar, 0, true, false);
+                var (okPatch, msgPatch) = MedalAsarPatcher.ApplyPatch(tempAsar, 0, true, 3);
                 Trace.Assert(okPatch, $"ASAR patch failed: {msgPatch}");
-                Trace.Assert(MedalAsarPatcher.GetStatus(tempAsar) == PatchStatus.Patched, "Expected Patched V10 status");
+                Trace.Assert(MedalAsarPatcher.GetStatus(tempAsar) == PatchStatus.Patched, "Expected Patched V18 status");
 
                 var preloadText = Encoding.UTF8.GetString(AsarArchive.ReadFile(tempAsar, "preload.min.js"));
-                Trace.Assert(preloadText.Contains("REMEDAL_THROWBACK_PATCH_V10", StringComparison.Ordinal), "Missing V10 patch marker");
+                Trace.Assert(preloadText.Contains("REMEDAL_THROWBACK_PATCH_V18", StringComparison.Ordinal), "Missing V18 patch marker");
                 Trace.Assert(!preloadText.Contains("require(\"fs\")", StringComparison.Ordinal), "Sandboxed preload must not require fs");
                 Trace.Assert(!preloadText.Contains("__REMEDAL_CONFIG_JSON__", StringComparison.Ordinal), "Config placeholder was not substituted");
-                Trace.Assert(preloadText.Contains("onlyLastYear", StringComparison.Ordinal), "Missing onlyLastYear config support");
+                Trace.Assert(preloadText.Contains("\"maxYears\":3", StringComparison.Ordinal), "Missing maxYears config support");
                 Trace.Assert(preloadText.Contains("story-avatar-card", StringComparison.Ordinal), "Missing native Stories bar selector");
-                Trace.Assert(preloadText.Contains("width:82px;height:82px", StringComparison.Ordinal), "Missing 82px Story ring sizing");
-                Trace.Assert(preloadText.Contains("Link teilen", StringComparison.Ordinal), "Missing Medal-style share link button");
+                Trace.Assert(preloadText.Contains("measureNativeRingSize", StringComparison.Ordinal), "Missing dynamic native Story ring sizing");
+                Trace.Assert(preloadText.Contains("Link teilen", StringComparison.Ordinal), "Missing Link teilen button");
+                Trace.Assert(preloadText.Contains("requestAnimationFrame", StringComparison.Ordinal), "Missing 60fps requestAnimationFrame progress loop");
                 Trace.Assert(preloadText.Contains("requestFullscreen", StringComparison.Ordinal), "Missing fullscreen control");
                 Trace.Assert(preloadText.Contains("remedal_watched_throwbacks_v2", StringComparison.Ordinal), "Missing watched tracking storage key");
                 Trace.Assert(preloadText.Contains("remedal_player_volume_v1", StringComparison.Ordinal), "Missing volume persistence storage key");
@@ -161,7 +162,7 @@ internal static class Program
                 var (okRestore, msgRestore) = MedalAsarPatcher.RestoreOriginal(tempAsar);
                 Trace.Assert(okRestore, $"ASAR restore failed: {msgRestore}");
                 Trace.Assert(new FileInfo(tempAsar).Length == cleanLen, "Restored app.asar size mismatch");
-                Console.WriteLine("[OK] ASAR V10 sandbox-safe patch, integrity check, and backup restore verified on temp copy");
+                Console.WriteLine("[OK] ASAR V18 sandbox-safe patch, integrity check, and backup restore verified on temp copy");
             }
 
             return 0;

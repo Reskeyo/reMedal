@@ -12,6 +12,7 @@ public sealed class AppConfig
     public int MaxBackups { get; set; } = 5;
     public bool ThrowbacksEnabled { get; set; }
     public int ThrowbackWindowDays { get; set; } = 0;
+    public int ThrowbackMaxYears { get; set; } = 0;
     public bool ThrowbackOnlyLastYear { get; set; } = false;
     public bool BlockAdsEnabled { get; set; } = true;
 
@@ -35,7 +36,11 @@ public sealed class AppConfig
             {
                 var cfg = JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(path));
                 if (cfg is not null)
+                {
+                    if (cfg.ThrowbackMaxYears == 0 && cfg.ThrowbackOnlyLastYear)
+                        cfg.ThrowbackMaxYears = 1;
                     return cfg;
+                }
             }
         }
         catch
