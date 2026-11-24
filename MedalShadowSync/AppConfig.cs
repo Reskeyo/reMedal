@@ -11,7 +11,7 @@ public sealed class AppConfig
     public bool StartMinimized { get; set; }
     public int MaxBackups { get; set; } = 5;
     public bool ThrowbacksEnabled { get; set; }
-    public int ThrowbackWindowDays { get; set; } = 3;
+    public int ThrowbackWindowDays { get; set; } = 0;
     public bool ThrowbackOnlyLastYear { get; set; } = false;
     public bool BlockAdsEnabled { get; set; } = true;
 

@@ -22,6 +22,9 @@ public sealed class MainForm : Form
 
     private static readonly (int Days, string Label)[] WindowOptions =
     [
+        (0, "1 Tag (selber Tag)"),
+        (1, "±1 Tag"),
+        (2, "±2 Tage"),
         (3, "±3 Tage"),
         (7, "±7 Tage"),
         (14, "±14 Tage"),
@@ -256,7 +259,7 @@ public sealed class MainForm : Form
             FlatStyle = FlatStyle.Flat,
             BackColor = InputBg,
             ForeColor = TextPrimary,
-            Width = 115,
+            Width = 145,
             Anchor = AnchorStyles.Left,
             Margin = new Padding(0, 2, 24, 0)
         };
@@ -269,7 +272,8 @@ public sealed class MainForm : Form
             if (_windowDaysCombo.SelectedIndex < 0) return;
             _config.ThrowbackWindowDays = WindowOptions[_windowDaysCombo.SelectedIndex].Days;
             _config.Save();
-            AppendLog($"Rückblick-Zeitraum auf ±{_config.ThrowbackWindowDays} Tage gesetzt (zum Übernehmen in Medal bitte 'Erneut patchen' klicken).");
+            var desc = _config.ThrowbackWindowDays == 0 ? "1 Tag (selber Tag)" : $"±{_config.ThrowbackWindowDays} {(_config.ThrowbackWindowDays == 1 ? "Tag" : "Tage")}";
+            AppendLog($"Rückblick-Zeitraum auf {desc} gesetzt (zum Übernehmen in Medal bitte 'Erneut patchen' klicken).");
         };
 
         _blockAdsCheck = new CheckBox
@@ -562,7 +566,7 @@ public sealed class MainForm : Form
         switch (status)
         {
             case PatchStatus.Patched:
-                _patchStatusLabel.Text = "Status: Aktiv (V8 gepatcht)";
+                _patchStatusLabel.Text = "Status: Aktiv (V10 gepatcht)";
                 _patchStatusLabel.ForeColor = Color.FromArgb(74, 222, 128);
                 _patchBtn.Text = "Erneut patchen";
                 _restoreBtn.Enabled = true;
@@ -570,7 +574,7 @@ public sealed class MainForm : Form
             case PatchStatus.OutdatedPatch:
                 _patchStatusLabel.Text = "Status: Veralteter Patch (Update nötig)";
                 _patchStatusLabel.ForeColor = AccentAmber;
-                _patchBtn.Text = "Patch auf V8 aktualisieren";
+                _patchBtn.Text = "Patch auf V10 aktualisieren";
                 _restoreBtn.Enabled = true;
                 break;
             case PatchStatus.Unpatched:

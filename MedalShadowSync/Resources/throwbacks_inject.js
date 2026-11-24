@@ -1,5 +1,5 @@
 
-/* REMEDAL_THROWBACK_PATCH_V8 */
+/* REMEDAL_THROWBACK_PATCH_V10 */
 ;(function () {
   if (globalThis.__REMEDAL_THROWBACK_LOADED__) return;
   if (!Array.isArray(process?.argv) || !process.argv.includes("--renderer_name=main")) return;
@@ -7,18 +7,19 @@
 
   const electron = require("electron");
   const REMEDAL_CFG = __REMEDAL_CONFIG_JSON__;
-  const CFG_WINDOW_DAYS = (typeof REMEDAL_CFG?.windowDays === "number" && REMEDAL_CFG.windowDays >= 1)
+  const CFG_WINDOW_DAYS = (typeof REMEDAL_CFG?.windowDays === "number" && REMEDAL_CFG.windowDays >= 0)
     ? Math.min(90, Math.round(REMEDAL_CFG.windowDays))
-    : 3;
+    : 0;
   const CFG_BLOCK_ADS = REMEDAL_CFG?.blockAds !== false;
   const CFG_MAX_YEARS = REMEDAL_CFG?.onlyLastYear ? 1 : 6;
 
-  console.info("[reMedal] V8 loaded", { windowDays: CFG_WINDOW_DAYS, blockAds: CFG_BLOCK_ADS, maxYears: CFG_MAX_YEARS });
+  console.info("[reMedal] V10 loaded", { windowDays: CFG_WINDOW_DAYS, blockAds: CFG_BLOCK_ADS, maxYears: CFG_MAX_YEARS });
 
   const STORY_ITEM_ID = "remedal-throwback-story";
   const MODAL_ID = "remedal-throwbacks-story-modal";
   const ADBLOCK_STYLE_ID = "remedal-adblock-css";
-  const WATCHED_STORAGE_KEY = "remedal_watched_throwbacks_v1";
+  const WATCHED_STORAGE_KEY = "remedal_watched_throwbacks_v2";
+  const VOLUME_STORAGE_KEY = "remedal_player_volume_v1";
 
   const AD_URL_PATTERNS = [
     "medal.tv/ads",
@@ -61,6 +62,27 @@
     }
   }
 
+  function loadVolumePrefs() {
+    try {
+      const raw = localStorage.getItem(VOLUME_STORAGE_KEY);
+      if (!raw) return { volume: 1, muted: false };
+      const obj = JSON.parse(raw);
+      const vol = typeof obj?.volume === "number" && obj.volume >= 0 && obj.volume <= 1 ? obj.volume : 1;
+      const muted = Boolean(obj?.muted);
+      return { volume: vol, muted };
+    } catch {
+      return { volume: 1, muted: false };
+    }
+  }
+
+  function saveVolumePrefs(volume, muted) {
+    try {
+      localStorage.setItem(VOLUME_STORAGE_KEY, JSON.stringify({ volume, muted }));
+    } catch {
+      // Ignore storage errors
+    }
+  }
+
   function toMedalFsUrl(filePath) {
     if (!filePath) return "";
     return "medal-fs://file/" + encodeURIComponent(filePath);
@@ -86,8 +108,15 @@
     }
   }
 
+  function getLocalDayKey() {
+    const d = new Date();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${d.getFullYear()}-${m}-${day}`;
+  }
+
   async function loadThrowbacks(windowDays) {
-    const todayKey = new Date().toISOString().slice(0, 10);
+    const todayKey = getLocalDayKey();
     if (cachedClips && cachedDayKey === todayKey) {
       return cachedClips;
     }
@@ -254,8 +283,9 @@
       idx = firstUnwatched >= 0 ? firstUnwatched : 0;
     }
 
-    let isMuted = false;
-    let currentVol = 1;
+    const volPrefs = loadVolumePrefs();
+    let isMuted = volPrefs.muted;
+    let currentVol = volPrefs.volume;
     let currentRate = 1;
 
     const overlay = document.createElement("div");
@@ -404,14 +434,14 @@
 
     const muteBtn = document.createElement("button");
     muteBtn.style.cssText = btnCss;
-    muteBtn.textContent = "🔊";
+    muteBtn.textContent = (isMuted || currentVol === 0) ? "🔇" : "🔊";
 
     const volSlider = document.createElement("input");
     volSlider.type = "range";
     volSlider.min = "0";
     volSlider.max = "1";
     volSlider.step = "0.05";
-    volSlider.value = "1";
+    volSlider.value = String(currentVol);
     volSlider.style.cssText = "width:74px;height:4px;accent-color:#facc15;cursor:pointer;";
 
     leftCtrls.appendChild(playPauseBtn);
@@ -525,15 +555,13 @@
 
       populateQualities(clip);
       video.dataset.qIdx = "0";
+      video.dataset.watchedMarked = "";
       video.src = clip.qualities[0].url;
       video.muted = isMuted;
       video.volume = currentVol;
       video.playbackRate = currentRate;
       video.play().catch(() => {});
       playPauseBtn.textContent = "⏸";
-
-      markWatched(clip.id);
-      refreshStoryCardStyle(clips);
     }
 
     function togglePlay() {
@@ -557,6 +585,14 @@
 
     video.addEventListener("play", () => { playPauseBtn.textContent = "⏸"; });
     video.addEventListener("pause", () => { playPauseBtn.textContent = "▶"; });
+    video.addEventListener("playing", () => {
+      const current = playable[idx];
+      if (current && !video.dataset.watchedMarked) {
+        video.dataset.watchedMarked = "1";
+        markWatched(current.id);
+        refreshStoryCardStyle(clips);
+      }
+    });
 
     video.addEventListener("error", () => {
       if (!playable.length) return;
@@ -610,6 +646,7 @@
       isMuted = currentVol === 0;
       video.muted = isMuted;
       muteBtn.textContent = isMuted ? "🔇" : "🔊";
+      saveVolumePrefs(currentVol, isMuted);
     });
 
     qualitySelect.addEventListener("change", () => {
@@ -669,6 +706,7 @@
       isMuted = !isMuted;
       video.muted = isMuted;
       muteBtn.textContent = isMuted ? "🔇" : "🔊";
+      saveVolumePrefs(currentVol, isMuted);
     };
     closeBtn.onclick = closeModal;
     overlay.onclick = (e) => {
@@ -701,12 +739,14 @@
 
   function applyStoryCardStyle(card, ring, badge, label, clips) {
     const watched = getWatchedSet();
-    const hasUnwatched = clips.some((c) => !watched.has(c.id));
+    const unwatchedCount = clips.filter((c) => !watched.has(c.id)).length;
+    const hasUnwatched = unwatchedCount > 0;
+    console.info("[reMedal] Story state:", { total: clips.length, unwatched: unwatchedCount });
 
     if (hasUnwatched) {
       card.style.opacity = "1";
       ring.style.background = "linear-gradient(135deg,#facc15,#f97316,#ec4899)";
-      ring.style.boxShadow = "0 4px 12px rgba(250,204,21,0.28)";
+      ring.style.boxShadow = "0 4px 12px rgba(250,204,21,0.32)";
       badge.style.background = "#facc15";
       badge.style.color = "#0f172a";
       label.style.color = "#fde047";
@@ -808,7 +848,7 @@
   async function ensureStoryInjected() {
     sweepAdElements(document.documentElement);
 
-    const todayKey = new Date().toISOString().slice(0, 10);
+    const todayKey = getLocalDayKey();
     const existing = document.getElementById(STORY_ITEM_ID);
     const anchor = findStoryAnchor();
 
@@ -817,7 +857,10 @@
       return;
     }
 
-    if (existing && cachedDayKey === todayKey) return;
+    if (existing && cachedDayKey === todayKey) {
+      if (cachedClips) refreshStoryCardStyle(cachedClips);
+      return;
+    }
     if (existing && cachedDayKey !== todayKey) {
       existing.remove();
       cachedClips = null;
@@ -848,7 +891,7 @@
     window.addEventListener("hashchange", () => setTimeout(ensureStoryInjected, 300));
 
     setInterval(() => {
-      const todayKey = new Date().toISOString().slice(0, 10);
+      const todayKey = getLocalDayKey();
       if ((cachedDayKey && cachedDayKey !== todayKey) || (!document.getElementById(STORY_ITEM_ID) && findStoryAnchor())) {
         ensureStoryInjected();
       }

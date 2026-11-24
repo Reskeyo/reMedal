@@ -15,7 +15,7 @@ public enum PatchStatus
 
 public static class MedalAsarPatcher
 {
-    public const string PatchMarker = "/* REMEDAL_THROWBACK_PATCH_V8 */";
+    public const string PatchMarker = "/* REMEDAL_THROWBACK_PATCH_V10 */";
     private const string AnyPatchPrefix = "/* REMEDAL_THROWBACK_PATCH_";
 
     public static string? FindAppAsar()
@@ -49,7 +49,7 @@ public static class MedalAsarPatcher
 
     public static (bool Ok, string Message) ApplyPatch(
         string? asarPath = null,
-        int throwbackWindowDays = 3,
+        int throwbackWindowDays = 0,
         bool blockAdsEnabled = true,
         bool onlyLastYear = false)
     {
@@ -79,7 +79,7 @@ public static class MedalAsarPatcher
         var patchedBytes = Encoding.UTF8.GetBytes(preloadText + "\n" + injectJs);
 
         AsarArchive.ReplaceFile(asarPath, "preload.min.js", patchedBytes);
-        return (true, "Rückblicke- & AdBlock-Patch (V8) erfolgreich in Medal installiert. Bitte Medal neu starten.");
+        return (true, "Rückblicke- & AdBlock-Patch (V10) erfolgreich in Medal installiert. Bitte Medal neu starten.");
     }
 
     public static (bool Ok, string Message) RestoreOriginal(string? asarPath = null)

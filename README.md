@@ -35,7 +35,7 @@
 | :--- | :--- |
 | 🎬 **Automatischer ShadowPlay-Import** | Überwacht deinen NVIDIA ShadowPlay-Ordner per Event-Watcher, wartet bis Aufnahmen fertig geschrieben sind und trägt neue Clips direkt in Medals lokale Datenbank ein – **ohne Dateien zu kopieren oder Speicherplatz zu verschwenden**. |
 | 🎮 **Automatische Spiel-Erkennung** | Ordnet ShadowPlay-Unterordner (z. B. `Counter-strike 2`, `Dark Souls III`, `Rainbow Six Siege`) automatisch der passenden Medal-Spielkategorie zu – dank eingebautem Offline-Katalog mit **153.000+ Spielen**. |
-| 🕰️ **Rückblick-Stories in Medal** | Bringt die beliebte **„Rückblick“**-Story direkt neben *Your story* auf deine Medal-Startseite (`±3 Tage` Standard, einstellbar bis `±30 Tage`; alle vergangenen Jahre oder optional nur letztes Jahr). Zeigt deine hochgeladenen & zugeschnittenen Clips inkl. Medal-Style-Player, **Link teilen** & Gesehen-Status. |
+| 🕰️ **Rückblick-Stories in Medal** | Bringt die beliebte **„Rückblick“**-Story direkt neben *Your story* auf deine Medal-Startseite (`1 Tag (selber Tag)` Standard, einstellbar bis `±30 Tage`; alle vergangenen Jahre oder optional nur letztes Jahr). Zeigt deine hochgeladenen & zugeschnittenen Clips inkl. Medal-Style-Player, **Link teilen** & Gesehen-Status. |
 | 🚫 **Werbung ausblenden** | Blendet eingebettete Werbe-Banner in Medal client-seitig aus (optional per Checkbox abschaltbar). |
 | 🔄 **Vollautomatische Updates** | Prüft beim PC-/App-Start still im Hintergrund auf neue Releases über GitHub und aktualisiert sich ohne nervige Popups selbst. |
 
@@ -49,7 +49,7 @@
 2. **📦 Optional: Verpasste Clips nachholen**
    Klicke einmalig auf **„Letzten Monat nachimportieren“**, um alle Clips der letzten 30 Tage gesammelt nachzuziehen.
 3. **🌟 Rückblicke & Werbefreiheit in Medal aktivieren**
-   Wähle deinen gewünschten **Rückblick-Zeitraum** (`±3 Tage` Standard) und klicke auf **„Patch in Medal aktivieren“**. Falls Medal läuft, startet reMedal Medal kurz neu und bindet den Patch ein.
+   Wähle deinen gewünschten **Rückblick-Zeitraum** (`1 Tag (selber Tag)` Standard) und klicke auf **„Patch in Medal aktivieren“**. Falls Medal läuft, startet reMedal Medal kurz neu und bindet den Patch ein.
 4. **⚡ Autostart aktivieren**
    Hake **„Mit Windows starten“** und **„Minimiert im Tray starten“** an – danach läuft reMedal unbemerkt im System-Tray.
 
