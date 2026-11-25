@@ -603,7 +603,7 @@ public sealed class MainForm : Form
         switch (status)
         {
             case PatchStatus.Patched:
-                _patchStatusLabel.Text = "Status: Aktiv (V18 gepatcht)";
+                _patchStatusLabel.Text = "Status: Aktiv (V20 gepatcht)";
                 _patchStatusLabel.ForeColor = Color.FromArgb(74, 222, 128);
                 _patchBtn.Text = "Erneut patchen";
                 _restoreBtn.Enabled = true;
@@ -611,7 +611,7 @@ public sealed class MainForm : Form
             case PatchStatus.OutdatedPatch:
                 _patchStatusLabel.Text = "Status: Veralteter Patch (Update nötig)";
                 _patchStatusLabel.ForeColor = AccentAmber;
-                _patchBtn.Text = "Patch auf V18 aktualisieren";
+                _patchBtn.Text = "Patch auf V20 aktualisieren";
                 _restoreBtn.Enabled = true;
                 break;
             case PatchStatus.Unpatched:

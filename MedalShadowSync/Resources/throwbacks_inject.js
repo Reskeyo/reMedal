@@ -1,5 +1,5 @@
 
-/* REMEDAL_THROWBACK_PATCH_V18 */
+/* REMEDAL_THROWBACK_PATCH_V20 */
 ;(function () {
   if (globalThis.__REMEDAL_THROWBACK_LOADED__) return;
   if (!Array.isArray(process?.argv) || !process.argv.includes("--renderer_name=main")) return;
@@ -16,7 +16,7 @@
     : (REMEDAL_CFG?.onlyLastYear ? 1 : 10);
   const CFG_ICON_URI = typeof REMEDAL_CFG?.iconDataUri === "string" ? REMEDAL_CFG.iconDataUri : "";
 
-  console.info("[reMedal] V18 loaded", { windowDays: CFG_WINDOW_DAYS, blockAds: CFG_BLOCK_ADS, maxYears: CFG_MAX_YEARS });
+  console.info("[reMedal] V20 loaded", { windowDays: CFG_WINDOW_DAYS, blockAds: CFG_BLOCK_ADS, maxYears: CFG_MAX_YEARS });
 
   const STORY_ITEM_ID = "remedal-throwback-story";
   const MODAL_ID = "remedal-throwbacks-story-modal";
@@ -1031,13 +1031,45 @@
     loadClip(idx);
   }
 
-  // --- Seamless Medal Stories bar integration (matches native story-avatar-card ring size) ---
+  // --- Seamless Medal Home integration (new 2648+ Home section + legacy Stories bar fallback) ---
+  function findHomeSectionAnchor() {
+    const targetTitles = ["friends", "freunde", "top 10s", "patch notes"];
+    const matches = new Map();
+    const maxLeft = Math.max(420, window.innerWidth * 0.55);
+
+    for (const el of document.querySelectorAll("h1, h2, h3, h4, span, div")) {
+      if (el.children.length > 0 || el.id === STORY_ITEM_ID || el.closest(`#${STORY_ITEM_ID}`)) continue;
+      const txt = (el.textContent || "").trim().toLowerCase();
+      if (!targetTitles.includes(txt) || matches.has(txt)) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0 || r.left > maxLeft) continue;
+
+      let cur = el.parentElement;
+      for (let depth = 0; depth < 6 && cur && cur !== document.body; depth++) {
+        const cr = cur.getBoundingClientRect();
+        const parent = cur.parentElement;
+        if (cr.width >= 440 && cr.height >= 100 && parent && parent.children.length >= 2) {
+          matches.set(txt, cur);
+          break;
+        }
+        cur = parent;
+      }
+    }
+
+    for (const title of targetTitles) {
+      if (matches.has(title)) {
+        return { el: matches.get(title), after: false, mode: "section" };
+      }
+    }
+    return null;
+  }
+
   function findStoryAnchor() {
     const own = document.querySelector('[data-testid="story-avatar-card"][data-own-story]');
-    if (own) return { el: own, after: true };
+    if (own) return { el: own, after: true, mode: "story" };
     const first = document.querySelector('[data-testid="story-avatar-card"]');
-    if (first) return { el: first, after: false };
-    return null;
+    if (first) return { el: first, after: false, mode: "story" };
+    return findHomeSectionAnchor();
   }
 
   function measureNativeRingSize(anchorEl) {
@@ -1157,6 +1189,161 @@
     return card;
   }
 
+  function measureNativeHomeCardWidth(anchorEl) {
+    if (anchorEl) {
+      for (const el of anchorEl.querySelectorAll("div, a, button")) {
+        const r = el.getBoundingClientRect();
+        if (r.width >= 220 && r.width <= 420 && r.height >= 120 && r.height <= 260) {
+          const ratio = r.width / r.height;
+          if (ratio >= 1.45 && ratio <= 2.05) {
+            return Math.round(r.width);
+          }
+        }
+      }
+    }
+    return 300;
+  }
+
+  function buildHomeThrowbacksSection(clips, anchorEl) {
+    const first = clips[0];
+    const cardWidth = measureNativeHomeCardWidth(anchorEl);
+    const stackLayers = Math.min(2, Math.max(0, clips.length - 1)); // max 3 cards high (front + up to 2 behind)
+    const years = Array.from(new Set(clips.map((c) => c.yearsAgo).filter(Boolean))).sort((a, b) => a - b);
+    const yearTitle = years.length > 1
+      ? `Vor ${years[0]}–${years[years.length - 1]} Jahren`
+      : (first.yearsAgo === 1 ? "Vor 1 Jahr" : `Vor ${first.yearsAgo} Jahren`);
+
+    const section = document.createElement("div");
+    section.id = STORY_ITEM_ID;
+    section.style.cssText = "width:100%;margin:0 0 24px 0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;user-select:none;";
+
+    const heading = document.createElement("div");
+    heading.textContent = "Rückblicke";
+    heading.style.cssText = "font-size:20px;font-weight:700;color:#f8fafc;margin:0 0 14px 0;letter-spacing:-0.01em;";
+
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex;align-items:flex-start;gap:14px;";
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.title = `Rückblicke öffnen (${clips.length} Clip${clips.length === 1 ? "" : "s"})`;
+    btn.style.cssText = `width:${cardWidth}px;max-width:100%;display:flex;flex-direction:column;gap:8px;background:transparent;border:none;padding:0;text-align:left;cursor:pointer;transition:opacity 0.2s ease;`;
+    btn.onclick = () => openStoryModal(clips);
+
+    // Stack container (front card + up to 2 peeking cards behind at the top, max 3 high)
+    const stackWrap = document.createElement("div");
+    stackWrap.style.cssText = `position:relative;width:100%;margin-top:${stackLayers * 6}px;`;
+
+    const backCards = [];
+    for (let layer = stackLayers; layer >= 1; layer--) {
+      const inset = layer * 10;
+      const topOffset = layer * 6;
+      const bg = layer === 1 ? "#2a3140" : "#1c222e";
+      const borderCol = layer === 1 ? "rgba(255,255,255,0.14)" : "rgba(255,255,255,0.08)";
+      const back = document.createElement("div");
+      back.style.cssText = [
+        `position:absolute;left:${inset}px;right:${inset}px;top:-${topOffset}px;height:18px;`,
+        `border-radius:10px 10px 0 0;background:${bg};border:1px solid ${borderCol};border-bottom:none;`,
+        `z-index:${3 - layer};pointer-events:none;transition:transform 0.16s ease;`
+      ].join("");
+      stackWrap.appendChild(back);
+      backCards.push({ el: back, lift: layer + 1 });
+    }
+
+    const thumbWrap = document.createElement("div");
+    thumbWrap.style.cssText = "position:relative;z-index:3;width:100%;aspect-ratio:16/9;border-radius:10px;overflow:hidden;background:#141822;box-sizing:border-box;transition:box-shadow 0.16s ease,border-color 0.16s ease;";
+
+    const thumbSources = [];
+    for (const c of clips) {
+      if (c.thumbPath) thumbSources.push(toMedalFsUrl(c.thumbPath));
+      if (c.cloudThumbUrl) thumbSources.push(c.cloudThumbUrl);
+      if (c.thumbPath) thumbSources.push(toFileUrl(c.thumbPath));
+    }
+
+    let thumbImg = null;
+    if (thumbSources.length) {
+      let tIdx = 0;
+      thumbImg = document.createElement("img");
+      thumbImg.src = thumbSources[0];
+      thumbImg.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;transition:transform 0.18s ease;";
+      thumbImg.onerror = () => {
+        tIdx++;
+        if (tIdx < thumbSources.length) {
+          thumbImg.src = thumbSources[tIdx];
+        } else {
+          thumbImg.style.display = "none";
+        }
+      };
+      thumbWrap.appendChild(thumbImg);
+    }
+
+    const scrim = document.createElement("div");
+    scrim.style.cssText = "position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,0.08) 0%,rgba(0,0,0,0.45) 100%);pointer-events:none;";
+    thumbWrap.appendChild(scrim);
+
+    const statusPill = document.createElement("span");
+    statusPill.style.cssText = "position:absolute;top:8px;right:8px;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;pointer-events:none;";
+    thumbWrap.appendChild(statusPill);
+
+    const playBadge = document.createElement("span");
+    playBadge.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="display:block;"><path d="M8 5.14v14l11-7-11-7z"/></svg>';
+    playBadge.style.cssText = "position:absolute;left:8px;bottom:8px;width:28px;height:28px;border-radius:999px;background:rgba(0,0,0,0.68);color:#ffffff;display:flex;align-items:center;justify-content:center;pointer-events:none;";
+    thumbWrap.appendChild(playBadge);
+
+    btn.onmouseenter = () => {
+      if (thumbImg) thumbImg.style.transform = "scale(1.04)";
+      for (const b of backCards) b.el.style.transform = `translateY(-${b.lift}px)`;
+    };
+    btn.onmouseleave = () => {
+      if (thumbImg) thumbImg.style.transform = "none";
+      for (const b of backCards) b.el.style.transform = "none";
+    };
+
+    stackWrap.appendChild(thumbWrap);
+
+    const meta = document.createElement("div");
+    meta.style.cssText = "display:flex;flex-direction:column;gap:2px;padding:0 2px;";
+    const titleEl = document.createElement("div");
+    titleEl.textContent = yearTitle;
+    titleEl.style.cssText = "font-size:14px;font-weight:600;color:#f8fafc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+    const subEl = document.createElement("div");
+    const clipCountTxt = `${clips.length} Clip${clips.length === 1 ? "" : "s"}`;
+    subEl.textContent = first.game ? `${first.game} • ${clipCountTxt}` : `${formatDate(first.createdAt)} • ${clipCountTxt}`;
+    subEl.style.cssText = "font-size:12.5px;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+    meta.appendChild(titleEl);
+    meta.appendChild(subEl);
+
+    btn.appendChild(stackWrap);
+    btn.appendChild(meta);
+    row.appendChild(btn);
+    section.appendChild(heading);
+    section.appendChild(row);
+
+    const updateSectionStyle = (list) => {
+      const watched = getWatchedSet();
+      const unwatchedCount = list.filter((c) => !watched.has(c.id)).length;
+      if (unwatchedCount > 0) {
+        btn.style.opacity = "1";
+        thumbWrap.style.border = "2px solid #facc15";
+        thumbWrap.style.boxShadow = "0 4px 18px rgba(250,204,21,0.22)";
+        statusPill.textContent = `${unwatchedCount} neu`;
+        statusPill.style.background = "#facc15";
+        statusPill.style.color = "#0f172a";
+      } else {
+        btn.style.opacity = "0.78";
+        thumbWrap.style.border = "1px solid rgba(255,255,255,0.14)";
+        thumbWrap.style.boxShadow = "none";
+        statusPill.textContent = `${list.length} Clip${list.length === 1 ? "" : "s"}`;
+        statusPill.style.background = "rgba(0,0,0,0.68)";
+        statusPill.style.color = "#cbd5e1";
+      }
+    };
+
+    section._remedalUpdateStyle = updateSectionStyle;
+    updateSectionStyle(clips);
+    return section;
+  }
+
   async function ensureStoryInjected() {
     sweepAdElements(document.documentElement);
 
@@ -1184,8 +1371,10 @@
     const liveAnchor = findStoryAnchor();
     if (!liveAnchor) return;
 
-    const card = buildNativeStoryCard(clips, liveAnchor.el);
-    liveAnchor.el.insertAdjacentElement(liveAnchor.after ? "afterend" : "beforebegin", card);
+    const el = liveAnchor.mode === "section"
+      ? buildHomeThrowbacksSection(clips, liveAnchor.el)
+      : buildNativeStoryCard(clips, liveAnchor.el);
+    liveAnchor.el.insertAdjacentElement(liveAnchor.after ? "afterend" : "beforebegin", el);
   }
 
   function scheduleEnsure() {
